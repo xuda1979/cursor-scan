@@ -20,7 +20,9 @@ AUTH_INDICATORS = {
 }
 
 ROUTE_DECORATOR = re.compile(r"@(?:app\.|bp\.|router\.)?(route|get|post|put|delete|patch)")
-EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch|use)\s*\(")
+# ``use`` is deliberately excluded: ``app.use(express.json())`` middleware
+# mounts (body parsers, logging, CORS) are not routes and would be a noisy FP.
+EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch)\s*\(")
 FASTAPI_ROUTE = re.compile(r"@(?:app|router)\.(get|post|put|delete|patch)")
 
 

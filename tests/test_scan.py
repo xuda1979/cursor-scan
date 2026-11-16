@@ -23,6 +23,8 @@ BAD_EXPECTED = [
     ("injection.py", {"injection.sql_concat", "injection.shell_concat"}),
     ("permissions.py", {"perms.chmod_world_writable", "perms.world_writable_dir",
                         "perms.tmp_write_insecure"}),
+    ("access_control_flask.py", {"access_control.missing_auth"}),
+    ("access_control_api.js", {"access_control.missing_auth"}),
     ("secrets.py", {"secrets.aws_access_key", "secrets.aws_secret_key",
                     "secrets.slack_token", "secrets.github_token",
                     "secrets.google_api_key", "secrets.private_key", "secrets.stripe_key",

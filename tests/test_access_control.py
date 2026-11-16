@@ -126,6 +126,24 @@ class TestJavascriptFlagging:
         access_control.analyze_project(files, out)
         assert out == []
 
+    def test_middleware_mount_is_not_a_route(self):
+        # app.use(...) mounts body parsers / logging / CORS — those are not
+        # routes and must not be flagged as unauthenticated handlers.
+        files = {
+            "server.js": [
+                (1, "const express = require('express')"),
+                (2, "const app = express()"),
+                (3, "app.use(express.json())"),
+                (4, "app.use(cors())"),
+                (5, "app.get('/secure', requireAuth, (req, res) => {"),
+                (6, "  res.send('ok')"),
+                (7, "})"),
+            ],
+        }
+        out = []
+        access_control.analyze_project(files, out)
+        assert out == []
+
 
 class TestNoAuthContext:
     def test_project_without_any_auth_stays_quiet(self):
