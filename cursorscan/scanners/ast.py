@@ -236,10 +236,28 @@ def analyze_python(path, src, findings):
                     f"随机种子被硬编码为 {seed_val}", "改为随机种子 (os.urandom) 或可配置", "crypto"))
 
         # ------ unsafe deserialization ------
-        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads"):
+        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads",
+                  "_pickle.load", "_pickle.loads"):
             findings.append(_ev(
                 "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
                 f"pickle 反序列化 {args}", "改用 JSON / 安全序列化格式", "deserialization"))
+
+        # pickle-backed loaders from the ML/data stack execute arbitrary code
+        # on load (numpy.load only when allow_pickle=True; torch.load is gated
+        # by its weights_only=False default), reusing the deser.pickle rule.
+        if fn in ("joblib.load", "pandas.read_pickle", "pd.read_pickle"):
+            findings.append(_ev(
+                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                f"{fn} 底层 pickle 反序列化 {args}", "改用安全序列化格式", "deserialization"))
+        if fn in ("numpy.load", "np.load") and "allow_pickle=True" in args:
+            findings.append(_ev(
+                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                f"np.load 开启 allow_pickle 可执行任意代码", "关闭 allow_pickle 或改用 np.savez", "deserialization"))
+        if fn == "torch.load":
+            if not _torch_safe(args):
+                findings.append(_ev(
+                    "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                    f"torch.load 默认 pickle 反序列化 {args}", "使用 weights_only=True 或改用安全格式", "deserialization"))
 
         if fn in ("yaml.load", "yaml.full_load_all", "yaml.load_all"):
             if not _yaml_safe(fn, call, src, args):
@@ -405,6 +423,15 @@ def _yaml_safe(fn, call, src, args):
     if "SafeLoader" in args or "FullLoader" not in args and "Loader=yaml." in args:
         return "SafeLoader" in args
     return False
+
+
+def _torch_safe(args: str) -> bool:
+    """True when a torch.load call is provably safe: a static
+    ``weights_only=True`` keyword.  torch.load historically defaults to the
+    unsafe pickle-backed weights_only=False, so an omitted or negative
+    weights_only is not forgivable; a dynamic value is unverifiable."""
+    m = re.search(r"\bweights_only\s*=\s*True\s*\b", args)
+    return m is not None
 
 
 def _contains_sql(args: str) -> bool:

@@ -13,7 +13,8 @@ from .helpers import code_lines
 
 RE_PICKLE = re.compile(
     r"\b(pickle\.(loads?|load)|cPickle\.(loads?|load)|jsonpickle\.(loads?|load)"
-    r"|(?:cloudpickle|dill)\.(loads?|load)|import marshal|marshal\.(loads?))\b"
+    r"|(?:cloudpickle|dill)\.(loads?|load)|_pickle\.(loads?|load)|joblib\.load"
+    r"|(?:pandas|pd)\.read_pickle|import marshal|marshal\.(loads?))\b"
 )
 RE_YAML_UNSAFE = re.compile(
     r"\byaml\.unsafe_load\b"
@@ -40,8 +41,9 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                 if "marshal" in raw:
                     # import marshal is itself a use-risk; only flag explicit load.
                     continue
-        if RE_PICKLE.search(raw):
-            if "load" in raw or "loads" in raw:
+        m = RE_PICKLE.search(raw)
+        if m:
+            if "load" in m.group(1) or "read_pickle" in m.group(1):
                 findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
                                     "pickle 反序列化可执行任意代码", "改用 JSON/安全格式"))
         if RE_YAML_UNSAFE.search(raw):
