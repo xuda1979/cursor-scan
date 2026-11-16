@@ -69,6 +69,21 @@ _STATIC_RHS = re.compile(
 RE_WINDOW_OPEN = re.compile(r"\bwindow\.open\s*\(", re.I)
 RE_SINGLE_ARG_CALL = re.compile(r"^\s*[^,)]*\)")
 
+# Python server-side redirect helpers: Flask redirect(), starlette
+# RedirectResponse, Django HttpResponseRedirect. A dynamic target is an
+# open-redirect candidate (CWE-601); plain string literals and route builders
+# (url_for / reverse) stay safe internal targets. ``(?<!\.)`` excludes method
+# calls like ``response.redirect(...)``.
+RE_REDIRECT = re.compile(
+    r"(?<!\.)\b(?:redirect|RedirectResponse|HttpResponseRedirect)\s*\(",
+)
+_STATIC_REDIRECT_ARG = re.compile(
+    r"""^["'][^"'+\n]*["')\s]*$"""      # "static" / 'static'
+    r"""|^url_for\s*\("""              # url_for('route') -> internal URL
+    r"""|^(?:django[\w.]*\.)?reverse\s*\(""",  # reverse('route') -> internal URL
+    re.VERBOSE,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -122,4 +137,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                 findings.append(hit(lineno, "xss.reverse_tabnabbing", "反向标签窃取",
                                     "window.open 未指定 noopener，新页面可控制原页面",
                                     "追加 ', noopener' 或 'noopener,noreferrer' 特性"))
+        # Python server-side open redirect: flag dynamic targets, skip static
+        # literals and internal route builders.
+        if RE_REDIRECT.search(line):
+            arg = line.split("(", 1)[1] if "(" in line else ""
+            if not _STATIC_REDIRECT_ARG.search(arg.strip()):
+                findings.append(hit(lineno, "xss.open_redirect", "开放重定向",
+                                    "redirect 到动态 URL，用户输入可被用于钓鱼/开放重定向",
+                                    "校验跳转目标为站内白名单，拒绝外部 scheme"))
     return findings

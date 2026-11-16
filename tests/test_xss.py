@@ -132,6 +132,37 @@ class TestReverseTabnabbing:
         assert _analyze("window.open(url);\n") == []
 
 
+class TestServerSideOpenRedirect:
+    """Python redirect helpers: Flask redirect(), starlette
+    RedirectResponse, Django HttpResponseRedirect."""
+
+    def test_flask_redirect_with_request_arg_flags(self):
+        found = _analyze('return redirect(request.args.get("next"))\n')
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_starlette_redirect_response_flags(self):
+        found = _analyze("return RedirectResponse(req.query_params['url'])\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_django_http_response_redirect_flags(self):
+        found = _analyze("return HttpResponseRedirect(request.GET.get('next'))\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_static_literal_redirect_is_quiet(self):
+        assert _analyze('return redirect("/home")\n') == []
+
+    def test_url_for_route_is_quiet(self):
+        # url_for builds a same-app URL; a safe internal target.
+        assert _analyze("return redirect(url_for('profile'))\n") == []
+
+    def test_django_reverse_route_is_quiet(self):
+        assert _analyze("return HttpResponseRedirect(reverse('profile'))\n") == []
+
+    def test_method_call_redirect_is_quiet(self):
+        # HTTP-level response.redirect() is not a framework open-redirect helper.
+        assert _analyze("response.redirect('/login')\n") == []
+
+
 class TestPythonTemplates:
     def test_render_template_string(self):
         found = _analyze('html = render_template_string("<h1>" + name + "</h1>")\n')
