@@ -7,7 +7,7 @@ and also exposes route handlers without auth, flag the handler.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from ..models import Evidence
 
@@ -56,6 +56,11 @@ def analyze_project(files: Dict[str, List[Tuple[int, str]]],
     _flag_js(files, findings_out)
 
 
+_AUTH_DECORATORS = ("login_required", "jwt_required", "auth_required",
+                   "require_auth", "token_required", "permission_required",
+                   "role_required", "admin_required")
+
+
 def _flag_python(files, out) -> None:
     for path, lines in files.items():
         if not path.endswith(".py"):
@@ -64,24 +69,27 @@ def _flag_python(files, out) -> None:
             s = text.strip()
             if not ROUTE_DECORATOR.search(text):
                 continue
-            # collect decorators above this function
-            j = i - 1
-            decorators: List[str] = []
-            while j >= 0 and lines[j][1].strip().startswith("@"):
-                decorators.append(lines[j][1].strip())
-                j -= 1
+            # A route decorator is one line of a contiguous `@`-decorator block
+            # above a function definition. Gather the whole block (lines before
+            # AND after the route line) and look for any explicit auth
+            # decorator -- e.g. `@app.route(x)` then `@login_required` is
+            # exactly how a secured handler is written.
+            lo = hi = i
+            while lo - 1 >= 0 and lines[lo - 1][1].strip().startswith("@"):
+                lo -= 1
+            while hi + 1 < len(lines) and lines[hi + 1][1].strip().startswith("@"):
+                hi += 1
+            block = "".join(lines[k][1] for k in range(lo, hi + 1))
             auth_present = any(
-                "@" + d in "".join(decorators) for d in
-                ["login_required", "jwt_required", "auth_required", "require_auth",
-                 "token_required", "permission_required", "role_required"]
-            ) or any("login_required" in d or "jwt_required" in d or "auth" in d.lower()
-                     for d in decorators)
-            if not auth_present and not s.startswith("@"):
-                out.append(_new_evidence(
-                    path, lineno, "access_control.missing_auth", "路由缺少鉴权",
-                    f"路由处理器缺少登录/鉴权装饰器 (文件内的其他路由具有鉴权) {decorators}",
-                    "添加 @login_required / @jwt_required 装饰器"))
-            # if the current line IS a decorator that's a route AND no auth on same/next, handled above
+                re.search(rf"@{d}\b", block, re.I) for d in _AUTH_DECORATORS
+            )
+            if auth_present:
+                continue
+            out.append(_new_evidence(
+                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
+                f"路由处理器缺少登录/鉴权装饰器 (文件内的其他请求已使用鉴权)，"
+                f"所在装饰器块：{block.strip()}",
+                "添加 @login_required / @jwt_required 装饰器"))
 
 
 def _flag_js(files, out) -> None:

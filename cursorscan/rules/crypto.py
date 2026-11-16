@@ -12,37 +12,6 @@ from typing import List
 from ..models import Evidence
 from .helpers import code_lines
 
-# --- helpers used by the shared scanner ------------------------------------
-
-WEAK_HASH_CALLS = {
-    "md5": "crypto.md5_or_sha1",
-    "sha1": "crypto.md5_or_sha1",
-    "MD5": "crypto.md5_or_sha1",
-    "SHA1": "crypto.md5_or_sha1",
-    "get_md5_insecure": "crypto.md5_or_sha1",
-}
-
-DES_NAMES = {"des", "des3", "DES", "DES3", "tripledes"}
-ECB_NAMES = {"ecb", "ECB", "CipherMode.ECB"}
-FIXED_IV_ARGS = {
-    "iv",
-    "nonce",
-    "initialization_vector",
-    "fixed_iv",
-    "salt",
-}
-
-# hashlib constructors: hashlib.new("md5") etc.
-WEAK_HASHlib_NEW = {"md5", "sha1"}
-WEAK_HASHlib_ALGS = {"md5", "sha1"}
-
-# JS crypto.subtle / node crypto weak choices
-JS_WEAK = {
-    "createHash",
-    "pbkdf2",
-    "scryptSync",
-}
-
 # --- regex fallbacks (non-Python/JS, or undecided) --------------------------
 
 RE_MD5_CALL = re.compile(r"\b(authlib\.jose\.|Cryptodome\.Hash\.|Crypto\.Hash\.|hashlib\.(?:new\s*\(\s*[\"'])?)md5\b", re.I)
@@ -98,39 +67,4 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if RE_ECB.search(line):
             findings.append(hit(lineno, "crypto.ecb_mode", "不安全加密模式 (ECB)",
                                 "ECB 模式相同明文块产生相同密文块，泄露结构信息", "改用 GCM / CBC + 随机 IV"))
-    return findings
-
-
-# --- AST rules consumed by the tree-sitter walker ---------------------------
-# Return list of Evidence given a language-agnostic dict describing the call.
-def detect_weak_hash_py(values: dict, src: str) -> List[Evidence]:
-    findings = []
-    call = values.get("call")
-    obj = values.get("obj", "")
-    attr = values.get("attr", "")
-    if obj in ("hashlib",) and attr in WEAK_HASHlib_NEW:
-        findings.append(Evidence(
-            rule_id="crypto.md5_or_sha1",
-            title="弱哈希算法 (MD5/SHA1)",
-            severity="high",
-            file=values.get("file", ""),
-            line=values.get("line", 1),
-            message=f"hashlib.{attr} 用于非完整性校验场景",
-            fix="改用 hashlib.sha256 / sha3_256",
-            dimension="crypto",
-        ))
-    if attr == "new" and obj == "hashlib":
-        # hashlib.new('md5') / hashlib.new('sha1')
-        arg_text = values.get("args_text", "")
-        if any(a in arg_text for a in ("'md5'", '"md5"', "'sha1'", '"sha1"')):
-            findings.append(Evidence(
-                rule_id="crypto.md5_or_sha1",
-                title="弱哈希算法 (MD5/SHA1)",
-                severity="high",
-                file=values.get("file", ""),
-                line=values.get("line", 1),
-                message=f"hashlib.new({arg_text}) 调用弱哈希",
-                fix="改用 hashlib.new('sha256')",
-                dimension="crypto",
-            ))
     return findings

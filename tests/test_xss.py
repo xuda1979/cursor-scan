@@ -89,7 +89,9 @@ class TestPythonTemplates:
         assert _analyze('return render_template("profile.html", user=name)\n') == []
 
     def test_autoescape_off(self):
-        assert _analyze("template = \"{{ user | safe }}\"\n")
+        found = _analyze("template = \"{{ user | safe }}\"\n")
+        assert [f.rule_id for f in found] == ["xss.template_render"]
+        assert all(f.message for f in found)
 
     def test_autoescape_block_off(self):
         found = _analyze("{% autoescape false %}\n")

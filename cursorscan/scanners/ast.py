@@ -13,12 +13,6 @@ import tree_sitter_typescript
 from tree_sitter import Language, Parser
 
 from ..models import Evidence
-from .. import rules as _rules
-from ..rules import crypto as crypto_rules
-from ..rules import deserialization as deser_rules
-from ..rules import injection as inject_rules
-from ..rules import permissions as perm_rules
-from ..rules import secrets as secrets_rules
 
 _LANG_CACHE: dict = {}
 

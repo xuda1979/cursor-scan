@@ -257,8 +257,6 @@ def _sarif_rules(findings: List[Evidence]) -> List[dict]:
 # --------------------------------------------------------------------------
 
 def print_text_report(result: ScanResult) -> None:
-    grade_color = {"A": "", "B": "", "C": "", "D": "", "F": ""}
-    _ = grade_color  # keep the mapping for future terminal coloring
     print("=" * 60)
     print(f"cursor-scan {__version__}  —  {result.target}")
     print(
