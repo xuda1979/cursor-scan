@@ -122,6 +122,25 @@ class TestOpenRedirect:
     def test_href_read_is_quiet(self):
         assert _analyze("const cur = location.href;\n") == []
 
+    def test_document_location_assignment_flags(self):
+        found = _analyze("document.location = userInput;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_window_location_assignment_flags(self):
+        found = _analyze("window.location = nextUrl;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_window_location_href_flags(self):
+        found = _analyze("window.location.href = nextUrl;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_document_location_compound_assignment_flags(self):
+        found = _analyze("document.location += token;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_document_location_static_is_quiet(self):
+        assert _analyze('document.location = "/home";\n') == []
+
     def test_finding_carries_fix(self):
         found = _analyze("location.assign(redirectUrl);\n")
         assert len(found) == 1

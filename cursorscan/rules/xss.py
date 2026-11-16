@@ -55,7 +55,10 @@ RE_AUTOESCAPE_OFF = re.compile(
 # variable / concatenated / interpolated target is an open-redirect candidate
 # when the URL is attacker-influenced (CWE-601).
 RE_LOCATION_NAV = re.compile(
-    r"\blocation\.(?:href\s*\+?=|assign\s*\(|replace\s*\()", re.I,
+    r"""\b(?:window\.)?(?:document\.)?location\.(?:href\s*\+?=|assign\s*\(|replace\s*\()"""
+    r"""|(?:window\.)?document\.location\s*\+?="""   # document.location = url navigates
+    r"""|window\.location\s*\+?=""",                  # window.location = url navigates
+    re.I,
 )
 # A right-hand side that is provably static: a plain string literal, or a
 # template literal with no interpolation.

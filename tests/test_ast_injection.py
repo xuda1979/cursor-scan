@@ -65,6 +65,20 @@ class TestPythonFstringConcat:
         assert finds == []
 
 
+class TestPythonShellConcatGaps:
+    def test_os_popen_concat_flags(self):
+        finds = _py("out = os.popen('ls ' + user_dir)\n")
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_os_popen_static_is_clean(self):
+        finds = _py("out = os.popen('ls /tmp')\n")
+        assert finds == []
+
+    def test_os_popen_list_form_is_clean(self):
+        finds = _py("out = os.popen(['ls', d])\n")
+        assert finds == []
+
+
 class TestJSTemplateLiteralConcat:
     def test_db_query_template_literal_flags(self):
         finds = _js("db.query(`SELECT * FROM users WHERE id = ${id}`);\n")

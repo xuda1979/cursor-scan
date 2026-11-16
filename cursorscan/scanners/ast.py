@@ -233,7 +233,7 @@ def analyze_python(path, src, findings):
                 findings.append(_ev(
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
                     f"SQL 通过字符串拼接: {args}", "使用参数化查询 (?, %s)", "injection"))
-        if fn in ("os.system",) or fn.startswith("subprocess."):
+        if fn in ("os.system", "os.popen") or fn.startswith("subprocess."):
             if "shell=True" in args or "shell = True" in args:
                 if _has_concat(args):
                     findings.append(_ev(
@@ -242,7 +242,7 @@ def analyze_python(path, src, findings):
             # non-shell but still uses string command with concat -> command injection
             if _has_concat(args) and fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
                                             "subprocess.check_output", "subprocess.check_call",
-                                            "os.system"):
+                                            "os.system", "os.popen"):
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                     f"命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
