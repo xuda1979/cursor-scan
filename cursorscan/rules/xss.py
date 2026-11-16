@@ -44,10 +44,30 @@ RE_DOC_TEMPLATE_INTERP = re.compile(
 RE_TEMPLATE_RENDER = re.compile(
     r"\b(render_template_string|flask\.Markup|markupsafe\.Markup|\bMarkup)\s*\(",
 )
-# Jinja autoescape disabled: {% autoescape false %} / |safe filter
+# jinja autoescape disabled: {% autoescape false %} / |safe filter
 RE_AUTOESCAPE_OFF = re.compile(
     r"(\{%\s*autoescape\s+(false|off)\s*%\}|\|\s*safe\b)",
 )
+
+# Navigating to a dynamic URL: ``location.href = x``, ``location.assign(x)``,
+# ``location.replace(x)``. A static-literal target is ordinary navigation; a
+# variable / concatenated / interpolated target is an open-redirect candidate
+# when the URL is attacker-influenced (CWE-601).
+RE_LOCATION_NAV = re.compile(
+    r"\blocation\.(?:href\s*=|assign\s*\(|replace\s*\()", re.I,
+)
+# A right-hand side that is provably static: a plain string literal, or a
+# template literal with no interpolation.
+_STATIC_RHS = re.compile(
+    r"""^["'][^"'+\n]*["']\s*[;)]?$"""          # "static" / 'static'
+    r"""|^`(?:[^`$]|\$(?!\{))*`\s*[;)]?$""",    # `static` (no ${...})
+    re.VERBOSE,
+)
+# window.open(...) creates a new browsing context (default target _blank).
+# Unless noopener / noreferrer are requested the opened page can control the
+# opener: reverse tabnabbing (CWE-1022).
+RE_WINDOW_OPEN = re.compile(r"\bwindow\.open\s*\(", re.I)
+RE_SINGLE_ARG_CALL = re.compile(r"^\s*[^,)]*\)")
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -85,4 +105,21 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "xss.template_render", "关闭模板转义",
                                 "Jinja 自动转义被关闭或将变量标记为 safe",
                                 "保持 autoescape 开启，移除 |safe 过滤器"))
+        # location navigation sinks: flag dynamic targets, skip static literals
+        if RE_LOCATION_NAV.search(line):
+            rhs = line.split("=", 1)[1] if "=" in line else line
+            if not _STATIC_RHS.search(rhs.strip()):
+                findings.append(hit(lineno, "xss.open_redirect", "开放重定向",
+                                    "location 跳转到动态 URL，用户可控时可用于钓鱼/开放重定向",
+                                    "服务端校验跳转目标为站内白名单域名"))
+        # window.open(...) without noopener: reverse tabnabbing.
+        # Only the two-argument target + features form is dangerous; the
+        # one-argument window.open(url) call is a plain navigation.
+        if RE_WINDOW_OPEN.search(line):
+            args = RE_WINDOW_OPEN.sub("", line, count=1)
+            if args.count(",") >= 1 and "noopener" not in line.lower() \
+                    and "noreferrer" not in line.lower():
+                findings.append(hit(lineno, "xss.reverse_tabnabbing", "反向标签窃取",
+                                    "window.open 未指定 noopener，新页面可控制原页面",
+                                    "追加 ', noopener' 或 'noopener,noreferrer' 特性"))
     return findings

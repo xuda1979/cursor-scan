@@ -85,6 +85,53 @@ class TestDocumentWrite:
         assert _analyze('document.write("<p>static footer</p>");\n') == []
 
 
+class TestOpenRedirect:
+    def test_location_href_dynamic_flags(self):
+        found = _analyze("location.href = userInput;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_location_href_concat_flags(self):
+        found = _analyze("location.href = '/go?next=' + req.query.next;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_location_assign_flags(self):
+        found = _analyze("location.assign(redirectUrl);\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_location_replace_flags(self):
+        found = _analyze("location.replace(window.location.search);\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_static_target_is_quiet(self):
+        assert _analyze('location.href = "/home";\n') == []
+
+    def test_href_read_is_quiet(self):
+        assert _analyze("const cur = location.href;\n") == []
+
+    def test_finding_carries_fix(self):
+        found = _analyze("location.assign(redirectUrl);\n")
+        assert len(found) == 1
+        assert found[0].dimension == "xss"
+        assert found[0].fix
+
+
+class TestReverseTabnabbing:
+    def test_two_arg_open_without_noopener_flags(self):
+        found = _analyze("window.open(url, '_blank');\n")
+        assert [f.rule_id for f in found] == ["xss.reverse_tabnabbing"]
+
+    def test_open_with_noopener_is_quiet(self):
+        assert _analyze("window.open(url, '_blank', 'noopener');\n") == []
+
+    def test_open_with_noreferrer_is_quiet(self):
+        assert _analyze("window.open(url, '_blank', 'noopener,noreferrer');\n") == []
+
+    def test_single_arg_open_is_plain_navigation(self):
+        # window.open(url) without a target opens a new tab but is a plain
+        # navigation -- the caller has no reference to control.
+        assert _analyze("window.open(url);\n") == []
+
+
 class TestPythonTemplates:
     def test_render_template_string(self):
         found = _analyze('html = render_template_string("<h1>" + name + "</h1>")\n')
