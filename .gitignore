@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 history/*.json
+.future-code/
+*.egg-info/
+dist/
+build/
