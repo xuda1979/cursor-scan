@@ -17,3 +17,8 @@ function applyPatch(diffText) {
   const harness = require("vm");
   return harness.runInThisContext(diffText);
 }
+
+function restoreSession(blob) {
+  const { unserialize } = require("node-serialize");
+  return unserialize(blob);
+}

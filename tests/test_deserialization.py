@@ -283,3 +283,36 @@ class TestNodeVmRun:
 
     def test_import_line_is_quiet(self):
         assert self._js('import { runInNewContext } from "vm";\n') == []
+
+
+class TestNodeUnserialize:
+    """node-serialize's unserialize() eval-deserializes its payload
+    (CVE-2017-5941): any non-literal payload is arbitrary code execution, the
+    JS counterpart of pickle. Dynamic payloads flag as deser.pickle; the
+    serialize() writer and static payloads stay quiet."""
+
+    def _js(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.js", code)]
+
+    def test_bare_unserialize_flags(self):
+        assert self._js("unserialize(payload);\n") == [("deser.pickle", "critical")]
+
+    def test_dotted_unserialize_flags(self):
+        assert self._js("serialize.unserialize(userBlob);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_destructured_require_form_flags(self):
+        assert self._js('const { unserialize } = require("node-serialize");\n'
+                        "const obj = unserialize(req.body.data);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_static_literal_is_quiet(self):
+        assert self._js('serialize.unserialize("{\\"x\\":1}");\n') == []
+
+    def test_template_literal_with_interp_flags(self):
+        assert self._js('serialize.unserialize(`{"_$$ND_FUNC$$_${fn}"}`);\n') == \
+            [("deser.pickle", "critical")]
+
+    def test_serialize_writer_is_quiet(self):
+        assert self._js("serialize.serialize(obj);\n") == []
+

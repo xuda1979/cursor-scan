@@ -59,6 +59,15 @@ RE_VM_RUN = re.compile(
     r"""(?:require\s*\(\s*["'](?:node:)?vm["']\s*\)|\bvm)"""
     r"""\.(?:runInThisContext|runInNewContext|runInContext)\s*\(\s*[^)"']""",
 )
+# node-serialize's unserialize() deserializes a serialized function graph by
+# eval'ing the payload (CVE-2017-5941): any non-literal payload is arbitrary
+# code execution, the JS counterpart of Python pickle. Both the bare
+# ``unserialize(payload)`` (destructured import) and the ``serialize.
+# unserialize(payload)`` dotted spelling are covered; the serialize() writer
+# direction and a bare static literal stay quiet.
+RE_NODE_UNSERIALIZE = re.compile(
+    r"\b(?:serialize\.)?unserialize\s*\(\s*[^)\"']",
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -109,4 +118,8 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.eval", "vm.run* 外部输入",
                                 "vm.runIn*Context 执行外部源代码，可执行任意代码",
                                 "重构解析逻辑，不使用 vm 执行用户代码"))
+        if RE_NODE_UNSERIALIZE.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "node-serialize 反序列化",
+                                "unserialize eval 反序列化负载，可执行任意代码 (CVE-2017-5941)",
+                                "改用 JSON.parse 等安全反序列化"))
     return findings
