@@ -38,3 +38,19 @@ function renderSnippet(snippet) {
   const button = document.querySelector("#run");
   button.setAttribute("onclick", snippet);
 }
+
+function insertBanner(html) {
+  $("#banner").append(html);
+}
+
+function prependMenu(html) {
+  $("#menu").prepend(html);
+}
+
+function replaceRow(html) {
+  jQuery("#rows .row").replaceWith(html);
+}
+
+function wrapWithCard(html) {
+  $("article").wrap(`<div class="card">${html}</div>`);
+}

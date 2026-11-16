@@ -72,6 +72,66 @@ class TestDomSink:
         assert f.message and f.fix
 
 
+class TestJQueryInsertFamily:
+    """jQuery HTML-insertion methods beyond .html(): .append/.prepend/.after/
+    .before/.replaceWith (shared names that are text-safe on plain DOM nodes,
+    gated on a $/jQuery receiver) and the jQuery-only .wrap family."""
+
+    def test_jquery_append_flags(self):
+        assert [f.rule_id for f in _analyze("$('#banner').append(userHtml);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_prepend_flags(self):
+        assert [f.rule_id for f in _analyze("$('#menu').prepend(html);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_after_flags(self):
+        assert [f.rule_id for f in _analyze("$('li').after(markup);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_before_flags(self):
+        assert [f.rule_id for f in _analyze("$('li').before(markup);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_replace_with_flags(self):
+        assert [f.rule_id for f in _analyze("jQuery('#rows .row').replaceWith(html);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_wrap_flags(self):
+        assert [f.rule_id for f in _analyze("$('article').wrap('<div>' + html + '</div>');\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_wrap_all_flags(self):
+        assert [f.rule_id for f in _analyze("$('section').wrapAll(userMarkup);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_wrap_inner_flags(self):
+        assert [f.rule_id for f in _analyze("$('.card').wrapInner(markup);\n")] == \
+            ["xss.dom_manipulation"]
+
+    def test_jquery_insert_finding_is_medium(self):
+        found = _analyze("$('#box').append(userHtml);\n")
+        assert len(found) == 1 and found[0].severity == "medium"
+
+    def test_vanilla_dom_append_is_quiet(self):
+        # Element.append() inserts nodes/text without parsing HTML; safe.
+        assert _analyze("list.append(item);\n") == []
+
+    def test_vanilla_dom_prepend_is_quiet(self):
+        assert _analyze("list.prepend(item);\n") == []
+
+    def test_vanilla_dom_replace_with_is_quiet(self):
+        assert _analyze("el.replaceWith(newnode);\n") == []
+
+    def test_jquery_text_is_quiet(self):
+        # .text() sets escaped text; the safe counterpart of these inserters.
+        assert _analyze("$('#banner').text(userInput);\n") == []
+
+    def test_jquery_append_with_literal_is_quiet(self):
+        # A hardcoded HTML chunk is inert static content.
+        assert _analyze("$('#box').append('<p>static note</p>');\n") == []
+
+
 class TestReact:
     def test_dangerously_set_inner_html(self):
         found = _analyze("props = { dangerouslySetInnerHTML: { __html: html } };\n")

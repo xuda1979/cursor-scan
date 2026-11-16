@@ -26,6 +26,20 @@ RE_DOM_SINK = re.compile(
     r"|\.html\s*\(\s*[^)]",
     re.I,
 )
+# jQuery's HTML-insertion family beyond .html(): .append / .prepend /
+# .after / .before / .replaceWith parse their argument as raw HTML exactly
+# like innerHTML, and .wrap / .wrapAll / .wrapInner take an HTML string to
+# build the wrapper. The wrap family is jQuery-only and matches directly;
+# the names shared with the DOM (append/prepend/after/before/replaceWith,
+# which are text-safe node insertions on plain elements) only match through
+# a $(...)/jQuery(...) selection, i.e. the jQuery API surface. The argument
+# is captured so a hardcoded string-literal stays quiet (inert static
+# content); any dynamic value is attacker-influenceable.
+RE_JQUERY_INSERT = re.compile(
+    r"""\$\(\s*[^)]*\)\.(?:append|prepend|after|before|replaceWith)\s*\(\s*([^)]*)"""
+    r"""|jQuery\(\s*[^)]*\)\.(?:append|prepend|after|before|replaceWith)\s*\(\s*([^)]*)"""
+    r"""|\.(?:wrap|wrapAll|wrapInner)\s*\(\s*([^)]*)""",
+)
 # React template: dangerouslySetInnerHTML={{ __html: ... }}
 RE_DANGEROUS_REACT = re.compile(
     r"\bdangerouslySetInnerHTML\b",
@@ -190,6 +204,13 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                                 "innerHTML/outerHTML/insertAdjacentHTML 写入未转义 HTML，"
                                 "用户输入可触发 XSS",
                                 "改用 textContent / innerText，或先做 HTML 转义"))
+        if m := RE_JQUERY_INSERT.search(line):
+            arg = next((g for g in m.groups() if g is not None), "")
+            if not _static_literal_arg(arg.strip()):
+                findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
+                                    "jQuery append/prepend/after/before/replaceWith/wrap* "
+                                    "将字符串解析为 HTML，用户输入可触发 XSS",
+                                    "改用 jQuery .text() 或 document.createElement，先做 HTML 转义"))
         if RE_DANGEROUS_REACT.search(line):
             findings.append(hit(lineno, "xss.dangerous_react", "React 危险 HTML",
                                 "dangerouslySetInnerHTML 直接渲染原始 HTML",
