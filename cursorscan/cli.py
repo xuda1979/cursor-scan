@@ -183,40 +183,6 @@ def print_diff(diff) -> None:
 # Serialization
 # --------------------------------------------------------------------------
 
-def result_to_dict(result: ScanResult) -> dict:
-    return {
-        "tool": {"name": TOOL_NAME, "version": __version__},
-        "target": result.target,
-        "started_at": result.started_at,
-        "duration_sec": result.duration_sec,
-        "scanned_files": result.scanned_files,
-        "skipped_files": result.skipped_files,
-        "score": result.score,
-        "grade": result.grade,
-        "summary": result.summary,
-        "dimensions": {
-            d: {"score": dim.score, "count": dim.count}
-            for d, dim in sorted(result.dimensions.items())
-        },
-        "findings": [evidence_to_dict(f) for f in result.findings],
-        "suppressed": [evidence_to_dict(f) for f in result.suppressed],
-    }
-
-
-def evidence_to_dict(f: Evidence) -> dict:
-    return {
-        "rule_id": f.rule_id,
-        "title": f.title,
-        "severity": f.severity,
-        "file": f.file,
-        "line": f.line,
-        "message": f.message,
-        "fix": f.fix,
-        "dimension": f.dimension,
-        "code_snippet": f.code_snippet,
-    }
-
-
 def result_to_sarif(result: ScanResult) -> dict:
     """Convert a ScanResult into a SARIF 2.1.0 log object."""
     rules = _sarif_rules(result.findings)
