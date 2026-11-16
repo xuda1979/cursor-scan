@@ -21,6 +21,10 @@ def parse_config_unsafe(text: str):
     return yaml.unsafe_load(text)
 
 
+def parse_config_explicit_unsafe(text: str):
+    return yaml.load(text, Loader=yaml.UnsafeLoader)
+
+
 def parse_form(data: dict):
     code = data["expression"]
     return eval(code)

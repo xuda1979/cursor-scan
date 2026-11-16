@@ -49,6 +49,14 @@ RE_YAML_UNSAFE = re.compile(
 RE_YAML_LOAD = re.compile(
     r"\b(yaml\.load|yaml\.load_all)\s*\(.*"
 )
+# The only loader families that refuse to build arbitrary Python objects:
+# (C)?(Safe|Base)Loader by construction, and (C)?FullLoader which PyYAML 5.1+
+# made the safe default for yaml.load.  The bare Loader alias (PyYAML < 5.1
+# default), UnsafeLoader, and CUnsafeLoader all construct arbitrary Python
+# objects and are explicitly dangerous.
+RE_YAML_SAFE_LOADER = re.compile(
+    r"(?:yaml\.)?C?(?:Safe|Base|Full)Loader",
+)
 RE_EVAL = re.compile(r"\beval\s*\(\s*[^)\"']")
 RE_EXEC = re.compile(r"\bexec\s*\(\s*[^)\"']")
 # Node's vm module: runInThisContext / runInNewContext / runInContext execute
@@ -105,7 +113,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if RE_YAML_UNSAFE.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
-        elif RE_YAML_LOAD.search(raw) and "SafeLoader" not in raw and "UnsafeLoader" not in raw:
+        elif RE_YAML_LOAD.search(raw) and not RE_YAML_SAFE_LOADER.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
         if RE_EVAL.search(raw):

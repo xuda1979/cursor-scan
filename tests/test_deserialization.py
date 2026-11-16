@@ -316,3 +316,52 @@ class TestNodeUnserialize:
     def test_serialize_writer_is_quiet(self):
         assert self._js("serialize.serialize(obj);\n") == []
 
+
+class TestYamlLoaderSelection:
+    """yaml.load produces its loader through the Loader keyword. The only
+    safe families are Safe/Base/Full (FullLoader being PyYAML 5.1+'s safe
+    default); bare ``yaml.load``, the Loader alias, and UnsafeLoader /
+    CUnsafeLoader all construct arbitrary Python objects (CWE-502)."""
+
+    def _py(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.py", code)]
+
+    def test_plain_load_flags(self):
+        assert self._py("yaml.load(text)\n") == [("deser.yaml_load", "critical")]
+
+    def test_load_all_flags(self):
+        assert self._py("yaml.load_all(stream)\n") == [("deser.yaml_load", "critical")]
+
+    def test_unsafe_load_flags(self):
+        assert self._py("yaml.unsafe_load(text)\n") == [("deser.yaml_load", "critical")]
+
+    def test_explicit_unsafe_loader_flags(self):
+        # Previously suppressed by the "UnsafeLoader" exclusion: an explicit
+        # unsafe loader is the provably worst form and must flag.
+        assert self._py("yaml.load(text, Loader=yaml.UnsafeLoader)\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_bare_loader_alias_flags(self):
+        assert self._py("yaml.load(text, Loader=Loader)\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_cunsafe_loader_flags(self):
+        assert self._py("yaml.load(text, Loader=yaml.CUnsafeLoader)\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_safe_loader_quiet(self):
+        assert self._py("yaml.load(text, Loader=yaml.SafeLoader)\n") == []
+
+    def test_csafe_loader_quiet(self):
+        assert self._py("yaml.load(text, Loader=yaml.CSafeLoader)\n") == []
+
+    def test_base_loader_quiet(self):
+        assert self._py("yaml.load(text, Loader=yaml.BaseLoader)\n") == []
+
+    def test_full_loader_quiet(self):
+        # FullLoader is the documented safe default for untrusted input.
+        assert self._py("yaml.load(text, Loader=yaml.FullLoader)\n") == []
+
+    def test_safe_load_quiet(self):
+        assert self._py("yaml.safe_load(text)\n") == []
+
