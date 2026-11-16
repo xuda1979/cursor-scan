@@ -49,9 +49,26 @@ cursor-scan . --fail-on medium # 有任何 medium+ 发现即 exit 1
 | `--format` | `text` / `json` / `sarif` | `text` |
 | `--fail-on` | 门禁严重度 `low`/`medium`/`high`/`critical` | `high` |
 | `--max-bytes` | 超过该字节数（文件）跳过，计入 skipped | 2 MiB |
+| `--history-dir` | 扫描快照保存目录 | `./history` |
+| `--no-save` | 不写入历史快照 | |
+| `--history` | 列出已保存的扫描快照（最新在前） | |
+| `--diff` | 比较两张快照，如 `--diff <before> <after>`（目标 slug 或文件路径） | |
 | `--version` | 打印版本 | |
 
 退出码：`0` 完成且无达到门禁的发现；`1` 有达到门禁的发现；`2` 用法/环境错误（如目录不存在、无权限）。
+
+## 扫描历史
+
+每次扫描默认保存一张 JSON 快照到 `history/`（可 `--no-save` 关闭）：
+
+```bash
+cursor-scan .                    # 扫描并保存快照
+cursor-scan --history            # 查看历史
+cursor-scan --diff proj-20261115-101000.json proj-20261115-102000.json  # 两次扫描差异
+```
+
+`--diff` 按 `(rule_id, file, line)` 对齐两次扫描，列出新增 / 修复 / 仍在的问题，并给出
+评分与等级的变化。快照是纯 JSON（`result_to_dict` 结构），可被离线仪表板直接读取。
 
 ## 评分模型
 
@@ -72,19 +89,22 @@ python -m pytest tests/ -q   # 全量测试
   共 21 条期望规则 ID，检测率须 ≥ 90%。
 - `fixtures/scan_good/`：干净项目，须零误报（0 findings、100 / A）。
 
-验收标准（SPEC AC1–AC3、AC5、AC7）：
+验收标准（SPEC AC1–AC7）：
 
 | AC | 状态 |
 | --- | --- |
 | 1. scan_bad 检测率 ≥ 90% | ✅ 21/21（100%） |
 | 2. scan_good 零误报 | ✅ 0 findings / 100 / A |
 | 3. 评分卡 + 逐项证据 | ✅ |
+| 4. 历史快照 + diff | ✅ |
 | 5. CLI 门禁 + SARIF | ✅ |
+| 6. Web dashboard | ⏳ P2 |
 | 7. 测试 + README | ✅ |
 
 ## 路线图
 
 - [x] P0 规则引擎 + 评分卡
 - [x] P1 CLI + SARIF + 门禁
-- [ ] P2 Web dashboard + 扫描历史 diff
+- [x] P2a 扫描历史快照 + diff（CLI）
+- [ ] P2b Web dashboard（读取历史快照）
 - [ ] P3 依赖风险 flag（requirements.txt / package.json 高危已知库）

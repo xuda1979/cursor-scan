@@ -13,9 +13,11 @@ import argparse
 import json
 import os
 import sys
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from . import __version__
+from .history import (diff_snapshots, list_history, load_snapshot,
+                      resolve_snapshot, result_to_dict, save_snapshot)
 from .models import Evidence, ScanResult, SEVERITY_ORDER
 from .scan import ScanOptions, scan_project
 
@@ -45,6 +47,22 @@ def _arg_parser() -> argparse.ArgumentParser:
         "--max-bytes", type=int, default=2 * 1024 * 1024,
         help="skip source files larger than this many bytes (default: 2 MiB)",
     )
+    p.add_argument(
+        "--history-dir", default=None,
+        help="directory for scan snapshots (default: ./history)",
+    )
+    p.add_argument(
+        "--no-save", action="store_true",
+        help="do not write a snapshot to the history directory",
+    )
+    p.add_argument(
+        "--history", action="store_true",
+        help="list saved scan snapshots instead of scanning",
+    )
+    p.add_argument(
+        "--diff", nargs=2, metavar=("BEFORE", "AFTER"),
+        help="compare two saved snapshots (target slug or file path)",
+    )
     p.add_argument("--version", action="version", version=f"cursor-scan {__version__}")
     return p
 
@@ -58,6 +76,18 @@ def main(argv: List[str] | None = None) -> int:
     args = _arg_parser().parse_args(argv)
     options = ScanOptions(max_bytes=args.max_bytes)
 
+    if args.history:
+        return _cmd_history(args.history_dir)
+    if args.diff:
+        try:
+            before = load_snapshot(resolve_snapshot(args.diff[0], args.history_dir))
+            after = load_snapshot(resolve_snapshot(args.diff[1], args.history_dir))
+        except FileNotFoundError as exc:
+            print(f"cursor-scan: {exc}", file=sys.stderr)
+            return 2
+        print_diff(diff_snapshots(before, after))
+        return 0
+
     try:
         result = scan_project(args.path, options)
     except NotADirectoryError as exc:
@@ -67,18 +97,55 @@ def main(argv: List[str] | None = None) -> int:
         print(f"cursor-scan: 无权限读取目标: {exc}", file=sys.stderr)
         return 2
 
+    saved = None
+    if not args.no_save:
+        try:
+            saved = save_snapshot(result, args.history_dir)
+        except OSError as exc:
+            print(f"cursor-scan: 警告: 保存历史快照失败: {exc}", file=sys.stderr)
+
     if args.format == "json":
         print(json.dumps(result_to_dict(result), ensure_ascii=False, indent=2))
     elif args.format == "sarif":
         print(json.dumps(result_to_sarif(result), ensure_ascii=False, indent=2))
     else:
         print_text_report(result)
+        if saved:
+            print(f"\n历史: 快照已保存到 {saved}  (--history 查看, --diff 比较)")
 
     threshold = SEVERITY_ORDER[args.fail_on]
     gate_findings = [f for f in result.findings if SEVERITY_ORDER[f.severity] >= threshold]
     if gate_findings:
         return 1
     return 0
+
+
+def _cmd_history(history_dir: Optional[str]) -> int:
+    entries = list_history(history_dir)
+    if not entries:
+        print("没有保存的扫描历史。")
+        return 1
+    print(f"{len(entries)} 条扫描历史 (最新在前):\n")
+    for e in entries:
+        print(f"  {e.describe()}")
+    print("\n比较: cursor-scan --diff <before> <after>")
+    return 0
+
+
+def print_diff(diff) -> None:
+    """Render a two-snapshot ScanDiff as added/fixed/kept finding lines."""
+    delta = diff.score_delta
+    sign = "+" if delta > 0 else ""
+    print(f"评分: {diff.before.get('score', '?')} -> {diff.after.get('score', '?')} "
+          f"({sign}{delta})  等级: {diff.before.get('grade', '?')} -> "
+          f"{diff.after.get('grade', '?')}")
+    print(f"新增 {len(diff.added)} 项, 修复 {len(diff.fixed)} 项, "
+          f"仍在 {len(diff.kept)} 项\n")
+    for label, items in (("新增", diff.added), ("修复", diff.fixed)):
+        for f in items:
+            sev = f.get("severity", "?")
+            print(f"  [{label}] [{sev.upper():<8}] {f.get('rule_id')}  "
+                  f"{f.get('file')}:{f.get('line')}  {f.get('message')}")
 
 
 # --------------------------------------------------------------------------
