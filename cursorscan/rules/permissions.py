@@ -9,14 +9,20 @@ from ..models import Evidence
 from .helpers import code_lines
 
 RE_CHMOD_0777 = re.compile(
-    r"\b(?:os\.chmod|chmod)\s*\(\s*[^,]+,\s*(0o?777|0o?666|0x1ff|777|666)\b"
+    r"\b(?:os\.chmod|chmod)\s*\(\s*[^,]+,\s*(?:mode\s*=\s*)?"
+    r"(0o?777|0o?666|0x1ff|777|666)\b"
 )
 RE_MKDIR_WORLD = re.compile(
-    r"\b(?:os\.makedirs?|mkdir)\s*\(\s*[^)]*(?:0o?777|mode\s*=\s*0o?777|,?\s*777)\s*\)"
+    r"\b(?:os\.makedirs?|mkdir)\s*\(\s*[^)]*(?:0o?777|0o?666|mode\s*=\s*0o?7{3}|mode\s*=\s*0o?666|,?\s*777|,?\s*666)\s*\)"
 )
 RE_TMP_WRITE = re.compile(
     r"\bopen\s*\(\s*[\"']/tmp/[^)\"']*",
 )
+# tempfile.mktemp creates a predictable temp path (CWE-377 insecure temporary
+# file): it guesses a name, races against the attacker over the gap between
+# the guess and the actual creation, and leaves the file world-readable.
+# mkstemp / NamedTemporaryFile create atomically with 0o600 and are safe.
+RE_MKTEMP = re.compile(r"\btempfile\.mktemp\b")
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -36,4 +42,8 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if RE_TMP_WRITE.search(raw):
             findings.append(hit(lineno, "perms.tmp_write_insecure", "不安全 /tmp 写入",
                                 "直接写 /tmp 易受符号链接攻击 (symlink attack)", "使用 tempfile.mkstemp 私有文件"))
+        if RE_MKTEMP.search(raw):
+            findings.append(hit(lineno, "perms.mktemp_unsafe", "不安全的 mktemp",
+                                "tempfile.mktemp 创建可预测临时文件，易受符号链接攻击 (CWE-377)",
+                                "改用 tempfile.mkstemp / mkdtemp (0o600 原子创建)"))
     return findings
