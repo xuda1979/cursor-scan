@@ -1,6 +1,7 @@
 """Hardcoded credentials — real detection targets."""
 
-AWS_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE1234"
+AWS_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE1234"  # TODO: move to IAM
+aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 slack_token = "xoxb-1234567890-abcdefghijklmnopqrst"
 

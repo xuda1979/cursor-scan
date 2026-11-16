@@ -13,7 +13,15 @@ from ..models import Evidence
 from .helpers import code_lines
 
 RE_AWS_AKEY = re.compile(r"\b(AKIA|ASIA|ABCDEFGHIJKLMNOPQRSTUVWXYZ)[A-Z0-9]{16,20}\b")
-RE_AWS_SKEY = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")  # too noisy; keep as helper only
+RE_AWS_SKEY = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")
+# Names that identify a variable as an AWS secret access key. A 40-char value
+# alone is ambiguous, so the paired rule only fires when one of these (or a
+# nearby access key ID) is present. The lookahead keeps ``aws_secretary``-style
+# longer identifiers from matching via the ``aws_secret`` branch.
+RE_AWS_SECRET_CONTEXT = re.compile(
+    r"(?:aws[_-]?secret(?:[_-]?access[_-]?key)?|secret[_-]?access[_-]?key)(?![A-Za-z0-9])",
+    re.I,
+)
 RE_SLACK_TOKEN = re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")
 RE_GITHUB_TOKEN = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")
 RE_GOOGLE_API = re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b")
@@ -93,7 +101,13 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if RE_AWS_AKEY.search(raw):
             findings.append(hit(lineno, "secrets.aws_access_key", "硬编码 AWS 访问密钥 ID",
                                 "检测到 AWS Access Key ID", "移除，使用 IAM 角色 / AWS Secrets Manager"))
-            # Also check for secret key on nearby line? Not here to avoid FP.
+        # AWS secret access keys are 40-char base64-ish strings with no stable
+        # prefix, so a bare match is too noisy to flag. Only report when the
+        # line also names the credential (``aws_secret_access_key=...``) or
+        # carries the access key ID it pairs with.
+        if RE_AWS_SKEY.search(raw) and (RE_AWS_SECRET_CONTEXT.search(raw) or RE_AWS_AKEY.search(raw)):
+            findings.append(hit(lineno, "secrets.aws_secret_key", "硬编码 AWS 秘密访问密钥",
+                                "检测到 AWS Secret Access Key", "移除，使用 IAM 角色 / AWS Secrets Manager / 环境变量"))
 
         # Generic KEY = value assignment
         m = RE_GENERIC_KEY.match(raw)
