@@ -12,7 +12,8 @@ from ..models import Evidence
 from .helpers import code_lines
 
 RE_PICKLE = re.compile(
-    r"\b(pickle\.(loads?|load)|cPickle\.(loads?|load)|import marshal|marshal\.(loads?))\b"
+    r"\b(pickle\.(loads?|load)|cPickle\.(loads?|load)|jsonpickle\.(loads?|load)"
+    r"|import marshal|marshal\.(loads?))\b"
 )
 RE_YAML_UNSAFE = re.compile(
     r"\byaml\.unsafe_load\b"
