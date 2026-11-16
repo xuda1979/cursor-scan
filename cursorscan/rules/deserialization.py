@@ -25,6 +25,24 @@ RE_SHELVE_OPEN = re.compile(r"\bshelve\.open\s*\(")
 # it from a file handle (typically followed by .load()) unpickles the data
 # stream with the same arbitrary-code-execution surface.
 RE_UNPICKLER = re.compile(r"\b(?:_?pickle)\.Unpickler\s*\(")
+# Python stdlib XML parsers resolve external entities by default (CWE-611
+# XXE): xml.etree / xml.dom / xml.sax / xml.parsers.expat all let a document's
+# DOCTYPE read local files and probe internal hosts during parsing. defusedxml
+# is the safe replacement; lxml does not resolve external entities by default
+# and stays quiet. Both the fully-qualified spellings (xml.etree.ElementTree.
+# parse) and the bare module names (minidom / pulldom / ElementTree after a
+# from-import) are covered.
+RE_XML_PARSE = re.compile(
+    r"\b(?:xml\.etree\.(?:c?ElementTree)\.(?:parse|fromstring)"
+    r"|xml\.dom\.minidom\.(?:parse|parseString)"
+    r"|xml\.dom\.pulldom\.(?:parse|parseString)"
+    r"|xml\.sax\.(?:parse|parseString|make_parser)"
+    r"|xml\.parsers\.expat\.ParserCreate"
+    r"|ElementTree\.(?:parse|fromstring)"
+    r"|minidom\.(?:parse|parseString)"
+    r"|pulldom\.(?:parse|parseString)"
+    r"|expat\.ParserCreate)\s*\(",
+)
 RE_YAML_UNSAFE = re.compile(
     r"\byaml\.unsafe_load\b"
 )
@@ -71,6 +89,10 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
                                 "pickle.Unpickler 反序列化可执行任意代码",
                                 "改用 JSON/安全格式"))
+        if RE_XML_PARSE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "stdlib XML 解析默认解析外部实体，可读取本地文件/内网探测",
+                                "改用 defusedxml 或禁用 DTD/外部实体"))
         if RE_YAML_UNSAFE.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))

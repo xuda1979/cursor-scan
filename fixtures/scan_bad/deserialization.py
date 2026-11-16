@@ -62,3 +62,25 @@ def unpickle_stream(fh):
     updater = pickle.Unpickler(fh)
     return updater.load()
 
+
+def parse_uploaded_xml(data: bytes):
+    root = xml.etree.ElementTree.fromstring(data)
+
+
+def load_xml_document(path: str):
+    return xml.dom.minidom.parse(path)
+
+
+def stream_xml_document(path: str):
+    xml.sax.parse(path, handler)
+
+
+def scan_incoming_xml(data: bytes):
+    parser = xml.parsers.expat.ParserCreate()
+
+
+def parse_client_xml(data: bytes):
+    from xml.etree import ElementTree
+    return ElementTree.fromstring(data)
+
+

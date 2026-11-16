@@ -193,6 +193,63 @@ class TestShelveAndUnpickler:
         assert _py("from pickle import Unpickler\nup = Unpickler(fh)\n") == []
 
 
+class TestXxeParsers:
+    """Python stdlib XML parsers resolve external entities by default (CWE-611
+    XXE): a DOCTYPE can read local files and probe internal hosts. defusedxml
+    is the safe replacement and lxml (no external-entity resolution by default)
+    stays quiet."""
+
+    def test_elementtree_fromstring_flags(self):
+        assert _py("xml.etree.ElementTree.fromstring(data)\n") == [("deser.xxe", "critical")]
+
+    def test_c_elementtree_parse_flags(self):
+        assert _py("xml.etree.cElementTree.parse(path)\n") == [("deser.xxe", "critical")]
+
+    def test_minidom_parse_flags(self):
+        assert _py("xml.dom.minidom.parse(path)\n") == [("deser.xxe", "critical")]
+
+    def test_minidom_parsestring_flags(self):
+        assert _py("xml.dom.minidom.parseString(xml_text)\n") == [("deser.xxe", "critical")]
+
+    def test_pulldom_parse_flags(self):
+        assert _py("xml.dom.pulldom.parse(path)\n") == [("deser.xxe", "critical")]
+
+    def test_sax_parse_flags(self):
+        assert _py("xml.sax.parse(path, handler)\n") == [("deser.xxe", "critical")]
+
+    def test_sax_make_parser_flags(self):
+        assert _py("parser = xml.sax.make_parser()\n") == [("deser.xxe", "critical")]
+
+    def test_expat_parsercreate_flags(self):
+        assert _py("parser = xml.parsers.expat.ParserCreate()\n") == [("deser.xxe", "critical")]
+
+    def test_bare_modulename_after_from_import_flags(self):
+        # After `from xml.etree import ElementTree` the bare `ElementTree.parse`
+        # spelling is the same sink; the import line itself stays quiet.
+        assert _py("from xml.etree import ElementTree\n"
+                   "root = ElementTree.parse(path)\n") == [("deser.xxe", "critical")]
+
+    def test_bare_minidom_after_from_import_flags(self):
+        assert _py("from xml.dom import minidom\n"
+                   "doc = minidom.parseString(xml_text)\n") == [("deser.xxe", "critical")]
+
+    def test_import_line_is_quiet(self):
+        assert _py("import xml.etree.ElementTree\n") == []
+
+    def test_lxml_is_quiet(self):
+        # lxml does not resolve external entities by default.
+        assert _py("from lxml import etree\nroot = etree.parse(path)\n") == []
+
+    def test_defusedxml_is_quiet(self):
+        # The documented safe replacement must never flag.
+        assert _py("import defusedxml.ElementTree as ET\nroot = ET.parse(path)\n") == []
+
+    def test_et_alias_is_quiet(self):
+        # `import xml.etree.ElementTree as ET` then `ET.parse` is a known
+        # uncovered alias spelling; the dotted form stays quiet.
+        assert _py("import xml.etree.ElementTree as ET\nroot = ET.parse(path)\n") == []
+
+
 class TestNodeVmRun:
     """Node's vm.runIn*Context executes a source string -- the JS counterpart
     of eval. Dynamic source flags as deser.eval; literals and other vm API

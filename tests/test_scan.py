@@ -19,7 +19,8 @@ from cursorscan.scan import ScanOptions, scan_project
 # firing, this table is where the regression shows up.
 BAD_EXPECTED = [
     # source file, expected rule_ids present
-    ("deserialization.py", {"deser.pickle", "deser.yaml_load", "deser.eval", "deser.exec"}),
+    ("deserialization.py", {"deser.pickle", "deser.yaml_load", "deser.eval", "deser.exec",
+                            "deser.xxe"}),
     ("exec_snippets.js", {"deser.eval"}),
     ("injection.py", {"injection.sql_concat", "injection.shell_concat"}),
     ("permissions.py", {"perms.chmod_world_writable", "perms.world_writable_dir",
