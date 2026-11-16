@@ -137,6 +137,11 @@ RE_SETATTR_EVENT = re.compile(
     re.I,
 )
 
+# Svelte's {@html ...} block inserts raw, unescaped HTML -- the component
+# counterpart of innerHTML. Only a non-literal payload is flagged; a hardcoded
+# string is inert server-controlled content.
+RE_SVELTE_HTML = re.compile(r"""\{@html\s+""")
+
 
 def _static_literal_arg(arg: str) -> bool:
     """True when ``arg`` is a plain string literal or a backtick template
@@ -237,4 +242,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "xss.event_handler_attr", "事件属性注入",
                                 "setAttribute 设置字符串形式的内联事件处理器",
                                 "使用 addEventListener + 函数引用，或先转义回调内容"))
+        # Svelte {@html ...} raw-insertion block (works on .svelte files).
+        if RE_SVELTE_HTML.search(line):
+            rest = line.split("{@html", 1)[1].split("}", 1)[0].strip()
+            if not _static_literal_arg(rest):
+                findings.append(hit(lineno, "xss.svelte_html", "Svelte 原始 HTML",
+                                    "{@html ...} 直接插入未转义 HTML，用户输入可触发 XSS",
+                                    "对内容做 HTML 转义，或改用普通插值 {expr}",
+                                    severity="high"))
     return findings

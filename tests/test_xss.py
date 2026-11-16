@@ -348,3 +348,30 @@ class TestSetAttrEvent:
     def test_single_quote_form_flags(self):
         found = _analyze("el.setAttribute('onclick', code)\n")
         assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+
+class TestSvelteHtml:
+    """Svelte's {@html ...} inserts raw unescaped HTML. Non-literal payloads
+    flag as high; hardcoded strings and plain interpolation stay quiet."""
+
+    def test_dynamic_expression_flags(self):
+        found = xss.analyze_code("t.svelte", "<p>{@html userBio}</p>\n")
+        assert [f.rule_id for f in found] == ["xss.svelte_html"]
+        assert found[0].severity == "high"
+
+    def test_interpolated_fstring_flags(self):
+        found = xss.analyze_code("t.svelte", '<p>{@html f"<b>{x}</b>"}</p>\n')
+        assert [f.rule_id for f in found] == ["xss.svelte_html"]
+
+    def test_concat_expression_flags(self):
+        found = xss.analyze_code("t.svelte", '<p>{@html user + "!"}</p>\n')
+        assert [f.rule_id for f in found] == ["xss.svelte_html"]
+
+    def test_static_literal_is_quiet(self):
+        assert xss.analyze_code("t.svelte", '<p>{@html "<b>hi</b>"}</p>\n') == []
+
+    def test_plain_interpolation_is_quiet(self):
+        assert xss.analyze_code("t.svelte", "<p>{username}</p>\n") == []
+
+    def test_import_lines_skipped(self):
+        assert xss.analyze_code("t.svelte", "import { onMount } from 'svelte';\n") == []

@@ -151,3 +151,38 @@ class TestPickleBackedVariants:
         finds = []
         analyze_python("x.py", "torch.load(path)\n", finds)
         assert finds[0].dimension == "deserialization"
+
+
+class TestNodeVmRun:
+    """Node's vm.runIn*Context executes a source string -- the JS counterpart
+    of eval. Dynamic source flags as deser.eval; literals and other vm API
+    calls stay quiet."""
+
+    def _js(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.js", code)]
+
+    def test_run_in_this_context_flags(self):
+        assert self._js("vm.runInThisContext(expr);\n") == [("deser.eval", "critical")]
+
+    def test_run_in_new_context_flags(self):
+        assert self._js("vm.runInNewContext(source);\n") == [("deser.eval", "critical")]
+
+    def test_run_in_context_flags(self):
+        assert self._js("vm.runInContext(code, ctx);\n") == [("deser.eval", "critical")]
+
+    def test_required_vm_form_flags(self):
+        assert self._js('require("vm").runInThisContext(code);\n') == \
+            [("deser.eval", "critical")]
+
+    def test_node_prefix_require_form_flags(self):
+        assert self._js('const vm = require("node:vm");\n'
+                        'vm.runInNewContext(user);\n') == [("deser.eval", "critical")]
+
+    def test_static_literal_is_quiet(self):
+        assert self._js('vm.runInNewContext("1+1");\n') == []
+
+    def test_compile_function_is_quiet(self):
+        assert self._js("vm.compileFunction(src, []);\n") == []
+
+    def test_import_line_is_quiet(self):
+        assert self._js('import { runInNewContext } from "vm";\n') == []

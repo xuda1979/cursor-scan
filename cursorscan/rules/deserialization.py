@@ -24,6 +24,14 @@ RE_YAML_LOAD = re.compile(
 )
 RE_EVAL = re.compile(r"\beval\s*\(\s*[^)\"']")
 RE_EXEC = re.compile(r"\bexec\s*\(\s*[^)\"']")
+# Node's vm module: runInThisContext / runInNewContext / runInContext execute
+# source strings -- the JS counterparts of eval. Like RE_EVAL, a static
+# literal operand stays quiet; dynamic source is the dangerous form. Both the
+# ``vm.run*`` spelling and the ``require("vm").run*`` form are covered.
+RE_VM_RUN = re.compile(
+    r"""(?:require\s*\(\s*["'](?:node:)?vm["']\s*\)|\bvm)"""
+    r"""\.(?:runInThisContext|runInNewContext|runInContext)\s*\(\s*[^)"']""",
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -58,4 +66,8 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if RE_EXEC.search(raw):
             findings.append(hit(lineno, "deser.exec", "exec 外部输入",
                                 "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
+        if RE_VM_RUN.search(raw):
+            findings.append(hit(lineno, "deser.eval", "vm.run* 外部输入",
+                                "vm.runIn*Context 执行外部源代码，可执行任意代码",
+                                "重构解析逻辑，不使用 vm 执行用户代码"))
     return findings

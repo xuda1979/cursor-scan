@@ -20,6 +20,7 @@ from cursorscan.scan import ScanOptions, scan_project
 BAD_EXPECTED = [
     # source file, expected rule_ids present
     ("deserialization.py", {"deser.pickle", "deser.yaml_load", "deser.eval", "deser.exec"}),
+    ("exec_snippets.js", {"deser.eval"}),
     ("injection.py", {"injection.sql_concat", "injection.shell_concat"}),
     ("permissions.py", {"perms.chmod_world_writable", "perms.world_writable_dir",
                         "perms.tmp_write_insecure"}),
@@ -34,6 +35,7 @@ BAD_EXPECTED = [
     ("requirements.txt", {"deps.known_vulnerable"}),
     ("package.json", {"deps.known_vulnerable"}),
     ("xss.py", {"xss.template_render", "xss.mark_safe"}),
+    ("xss_app.svelte", {"xss.svelte_html"}),
     ("xss.js", {"xss.dom_manipulation", "xss.dangerous_react", "xss.document_write",
                 "xss.script_src_injection", "xss.event_handler_attr"}),
 ]
