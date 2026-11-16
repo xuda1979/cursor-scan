@@ -342,8 +342,10 @@ def analyze_jsts(path, src, findings):
         args = args_text(call, src)
         line = _line_for(call)
 
-        # crypto.createHash('md5') / `sha1` / "md5" (any quoted static arg)
-        if fn.endswith(".createHash") or fn == "createHash":
+        # crypto.createHash('md5') / `sha1` / "md5" and createHmac (any
+        # quoted/backtick static first arg carrying the digest algorithm).
+        if (fn.endswith(".createHash") or fn == "createHash"
+                or fn.endswith(".createHmac") or fn == "createHmac"):
             algo_match = _js_static_string_arg(args)
             if algo_match is not None and algo_match.lower() in ("md5", "sha1"):
                 findings.append(_ev(
@@ -420,17 +422,17 @@ def _js_external(args: str) -> bool:
                                   "process.env", "input", "form", "url."))
 
 
-_JS_STATIC_STRING = re.compile(r"^[`\"']([A-Za-z0-9_.\-]+)[`\"']$")
+_JS_STATIC_STRING = re.compile(r"^[`\"']([A-Za-z0-9_.\-]+)[`\"']")
 
 
 def _js_static_string_arg(args: str) -> str | None:
     """Return the value of a static first string argument of a JS call.
 
     ``args`` is the raw source text of the ``arguments`` node, which includes
-    the wrapping parentheses (``("md5")``). Any single quoted -- single-quote,
-    double-quote or backtick -- literal counts as static, so a template like
-    ``(`sha1`)`` is recognised; identifiers, concatenations and interpolated
-    templates return ``None`` (dynamic, unverifiable).
+    the wrapping parentheses (``("md5")``). Only a static first literal counts
+    -- single-quote, double-quote or backtick -- so ``('sha1', key)`` and
+    ``(`md5`)`` are recognised, while identifiers, concatenations and
+    interpolated templates return ``None`` (dynamic, unverifiable).
     """
     inner = args.strip()
     if not (inner.startswith("(") and inner.endswith(")")):

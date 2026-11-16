@@ -69,6 +69,37 @@ class TestCreateHashSafeAndDynamic:
         assert finds == []
 
 
+class TestCreateHmacStaticArgs:
+    """createHmac(algorithm, key) shares createHash's weak-digest family; the
+    digest is always the first argument."""
+
+    def test_double_quoted_sha1_hmac_flags(self):
+        finds = _js('crypto.createHmac("sha1", secret)\n')
+        assert [(f.rule_id, f.line) for f in finds] == \
+            [("crypto.md5_or_sha1", 1)]
+
+    def test_single_quoted_md5_hmac_flags(self):
+        finds = _js("crypto.createHmac('md5', secret)\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_template_literal_sha1_hmac_flags(self):
+        finds = _js("crypto.createHmac(`sha1`, secret)\n")
+        assert [(f.rule_id, f.line) for f in finds] == \
+            [("crypto.md5_or_sha1", 1)]
+
+    def test_hmac_without_dot_namespace_flags(self):
+        finds = _js("createHmac('sha1', key)\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_sha256_hmac_is_quiet(self):
+        finds = _js("crypto.createHmac('sha256', secret)\n")
+        assert finds == []
+
+    def test_dynamic_digest_hmac_is_quiet(self):
+        finds = _js("crypto.createHmac(chosenDigest, secret)\n")
+        assert finds == []
+
+
 class TestE2EFixtureLock:
     def test_bad_fixture_crypto_rules_still_fire(self, scan_bad_dir):
         from cursorscan.scan import scan_project
