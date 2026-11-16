@@ -82,6 +82,26 @@ class TestDetectionRate:
             assert f.rule_id and f.message and f.fix
             assert f.severity in ("low", "medium", "high", "critical")
 
+    def test_findings_carry_offending_source_line(self, bad_result):
+        """Every finding resolves to a real code snippet (the dashboard and
+        SARIF ``region.snippet.text`` both rely on this backfill)."""
+        src_by_file: dict[str, dict[int, str]] = {}
+        for root, _, names in os.walk(bad_result.target):
+            for name in names:
+                p = os.path.join(root, name)
+                try:
+                    with open(p, encoding="utf-8") as fh:
+                        src_by_file.setdefault(p, {}).update(
+                            dict(enumerate(fh.read().splitlines(), start=1)))
+                except (OSError, UnicodeDecodeError):
+                    continue
+        for f in bad_result.findings:
+            assert f.code_snippet, f"{f.rule_id}@{f.file}:{f.line} has no snippet"
+            src = src_by_file.get(f.file)
+            if src is not None and f.line in src:
+                assert f.code_snippet == src[f.line].strip(), \
+                    f"snippet for {f.rule_id}@{f.file}:{f.line} is not the source line"
+
 
 class TestZeroFalsePositives:
     """AC2: the clean fixture tree must produce no findings at all."""

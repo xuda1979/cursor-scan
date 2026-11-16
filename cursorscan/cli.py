@@ -188,10 +188,16 @@ def result_to_sarif(result: ScanResult) -> dict:
     rules = _sarif_rules(result.findings)
     results = []
     for f in result.findings:
-        if f.line <= 0:
-            region = {}
-        else:
-            region = {"startLine": f.line}
+        region = {}
+        if f.line > 0:
+            region["startLine"] = f.line
+        if f.code_snippet:
+            # The snippet now travels into JSON / snapshots / SARIF alike, so
+            # XML consumers break the same way as before on a literal "]]>".
+            # Escape a literal CDATA-closer per SARIF 2.1.0 Appendix J.
+            region["snippet"] = {
+                "text": f.code_snippet.replace("]]>", "]]]]><![CDATA[>")
+            }
         results.append({
             "ruleId": f.rule_id,
             "level": {"critical": "error", "high": "error",

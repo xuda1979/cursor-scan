@@ -37,6 +37,22 @@ class TestFormats:
         assert run["results"], "sarif must carry findings"
         assert run["results"][0]["ruleId"]
 
+    def test_sarif_region_snippet_carries_source_line(self, scan_bad_dir,
+                                                      tmp_path, capsys):
+        rc = main([scan_bad_dir, "--format", "sarif",
+                   "--history-dir", str(tmp_path), "--no-save"])
+        doc = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        with_code = [
+            r for r in doc["runs"][0]["results"]
+            if r.get("locations")
+            and r["locations"][0]["physicalLocation"].get("region", {}).get("snippet")
+        ]
+        assert with_code, "at least one SARIF result should embed the source snippet"
+        for r in with_code:
+            snippet = r["locations"][0]["physicalLocation"]["region"]["snippet"]
+            assert snippet.get("text"), "snippet text must be non-empty"
+
     def test_text_output_has_scorecard(self, scan_good_dir, tmp_path, capsys):
         rc = main([scan_good_dir, "--history-dir", str(tmp_path), "--no-save"])
         out = capsys.readouterr().out

@@ -220,7 +220,34 @@ def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResu
 
     result.duration_sec = round(time.monotonic() - started, 3)
     _finalize(result, patterns, target)
+    _backfill_snippets(result, file_texts, target)
     return result
+
+
+def _backfill_snippets(result: ScanResult,
+                       file_texts: Dict[str, List[Tuple[int, str]]],
+                       target: str) -> None:
+    """Resolve the offending source line for every finding.
+
+    Rules report file/line only; the exact code fragment is filled in here so
+    JSON / SARIF output and the web dashboard all carry the same snippet.
+    ``access_control`` findings reference files by relative path while per-file
+    rules use the absolute path, so both keys are indexed.
+    """
+    by_path: Dict[str, List[Tuple[int, str]]] = dict(file_texts)
+    for rel, lines in file_texts.items():
+        by_path[os.path.join(target, rel)] = lines
+    for f in list(result.findings) + list(result.suppressed):
+        if f.code_snippet or f.line <= 0:
+            continue
+        lines = by_path.get(f.file)
+        if lines is None:
+            try:
+                lines = by_path.get(os.path.relpath(f.file, target))
+            except ValueError:
+                lines = None
+        if lines and 0 < f.line <= len(lines):
+            f.code_snippet = lines[f.line - 1][1].strip()
 
 
 def _finalize(result: ScanResult, patterns: List[IgnorePattern] = (),
