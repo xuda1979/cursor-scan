@@ -40,8 +40,7 @@ def encrypt_des(data: bytes, key: bytes) -> bytes:
 
 
 def encrypt_aes_ecb(data: bytes, key: bytes) -> bytes:
-    iv = b"0123456789abcdef"
-    cipher = AES.new(key, AES.MODE_CBC, iv=iv)
+    cipher = AES.new(key, AES.MODE_CBC, iv=b"0123456789abcdef")
     return cipher.encrypt(data)
 
 

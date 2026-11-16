@@ -95,27 +95,38 @@ def collect_new_expressions(root):
         stack.extend(node.children)
 
 
-def new_expression_name(node, src: str) -> str:
+def _bstr(bsrc: bytes, start: int, end: int) -> str:
+    """Slice a node's source span and decode back to text.
+
+    tree-sitter parses ``source.encode("utf-8")``, so ``start_byte`` /
+    ``end_byte`` are UTF-8 byte offsets into the encoded source.  Slicing the
+    original ``str`` with those offsets corrupts every span after the first
+    non-ASCII character, so spans are taken from the encoded bytes and decoded.
+    """
+    return bsrc[start:end].decode("utf-8", errors="surrogatepass")
+
+
+def new_expression_name(node, bsrc: bytes) -> str:
     """Textual constructor name of a ``new_expression``, e.g. ``Function``."""
     ctor = node.child_by_field_name("constructor")
     if ctor is None:
         return ""
-    return src[ctor.start_byte:ctor.end_byte]
+    return _bstr(bsrc, ctor.start_byte, ctor.end_byte)
 
 
-def call_fn_name(node, src: str) -> str:
+def call_fn_name(node, bsrc: bytes) -> str:
     """Return textual form of call function, e.g. 'hashlib.md5', 'yaml.load'."""
     fn = node.child_by_field_name("function")
     if fn is None:
         return ""
-    return src[fn.start_byte:fn.end_byte]
+    return _bstr(bsrc, fn.start_byte, fn.end_byte)
 
 
-def args_text(node, src: str) -> str:
+def args_text(node, bsrc: bytes) -> str:
     args = node.child_by_field_name("arguments")
     if args is None:
         return ""
-    return src[args.start_byte:args.end_byte]
+    return _bstr(bsrc, args.start_byte, args.end_byte)
 
 
 def _line_for(node) -> int:
@@ -134,9 +145,10 @@ def _ev(rule_id, title, sev, path, line, msg, fix, dimension):
 def analyze_python(path, src, findings):
     tree = parse(src, "python")
     root = tree.root_node
+    bsrc = src.encode("utf-8", errors="surrogatepass")
     for call in collect_calls(root, src):
-        fn = call_fn_name(call, src)
-        args = args_text(call, src)
+        fn = call_fn_name(call, bsrc)
+        args = args_text(call, bsrc)
         line = _line_for(call)
 
         # ----- weak crypto -----
@@ -159,17 +171,28 @@ def analyze_python(path, src, findings):
                     f"调用弱哈希 {fn}", "改用 sha256 (hashlib.sha256)", "crypto"))
         if fn in ("hmac.new", "hmac.HMAC"):
             digest = None
-            kw = _find_kw_literal(call, src, ("digestmod",))
+            kw = _find_kw_literal(call, bsrc, ("digestmod",))
             if kw is not None:
                 digest = _py_static_string(kw[0])  # digestmod="md5"
             else:
-                pos = _py_positional_args(call, src)
+                pos = _py_positional_args(call, bsrc)
                 if len(pos) >= 3:
                     digest = _py_static_string(pos[2])  # hmac.new(key, msg, "md5")
             if digest is not None and digest.lower() in ("md5", "sha1"):
                 findings.append(_ev(
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
                     f"HMAC 使用弱摘要 {digest}: {fn}({args})", "改用 sha256 摘要", "crypto"))
+
+        # weak KDF: too few PBKDF2 iterations (< 100k) makes brute forcing
+        # cheap.  hashlib.pbkdf2_hmac(hash, password, salt, iterations, ...):
+        # iterations is the fourth positional argument.
+        if fn == "hashlib.pbkdf2_hmac":
+            pos = _py_positional_args(call, bsrc)
+            if len(pos) >= 4 and _py_static_int(pos[3]) is not None \
+                    and _py_static_int(pos[3]) < 100000:
+                findings.append(_ev(
+                    "crypto.weak_kdf", "弱密钥派生 (KDF 迭代过少)", "medium", path, line,
+                    f"PBKDF2 迭代次数过少: {pos[3].strip()}", "使用 >= 100000 次迭代 (如 310000)", "crypto"))
 
         # ------ weak cipher / mode ------
         if fn in ("AES.new", "AES", "DES.new", "DES3.new", "DES", "TripleDES.new",
@@ -183,12 +206,21 @@ def analyze_python(path, src, findings):
                 findings.append(_ev(
                     "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
                     f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
-            # fixed IV with literal
-            m = _find_kw_literal(call, src, ("iv", "nonce"))
-            if m:
+            # fixed IV with a literal value only: ``iv=iv`` / ``nonce=nonce``
+            # pass a runtime variable, so only static constants prove the IV is
+            # fixed across runs.
+            m = _find_kw_literal(call, bsrc, ("iv", "nonce"))
+            if m and _py_static_value(m[0]) is not None:
                 findings.append(_ev(
                     "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
                     f"加密调用 {fn} 使用固定 IV {m[2]}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
+            # positional form: AES.new(key, mode, iv) -- the dedicated
+            # positional IV argument, e.g. AES.new(key, AES.MODE_CBC, b'...').
+            pos = _py_positional_args(call, bsrc)
+            if len(pos) >= 3 and _py_static_value(pos[2]) is not None:
+                findings.append(_ev(
+                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
+                    f"加密调用 {fn} 使用固定 IV {pos[2].strip()}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
         if fn.endswith(".new") and ("MODE.ECB" in args or "CipherMode.ECB" in args):
             findings.append(_ev(
                 "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
@@ -197,7 +229,7 @@ def analyze_python(path, src, findings):
         # ------ hardcoded random seed ------
         if fn in ("random.seed", "np.random.seed", "numpy.random.seed",
                   "torch.manual_seed", "torch.random.manual_seed", "random.seedfn"):
-            seed_val = _arg_literal(call, src)
+            seed_val = _arg_literal(call, bsrc)
             if seed_val is not None and _is_literal_scalar(seed_val):
                 findings.append(_ev(
                     "crypto.hardcoded_seed", "硬编码随机种子", "medium", path, line,
@@ -249,44 +281,67 @@ def analyze_python(path, src, findings):
 
         # ------ permissions ------
         if fn == "os.chmod" or "chmod" in fn:
-            mode = _last_arg(call, src)
+            mode = _last_arg(call, bsrc)
             if _is_0777(mode) or _is_0666(mode):
                 findings.append(_ev(
                     "perms.chmod_world_writable", "世界可写 chmod", "high", path, line,
                     f"os.chmod 权限 {mode} 世界可写", "使用 0o600/0o700", "permissions"))
         if "makedirs" in fn or fn == "os.makedirs" or fn == "mkdir" or fn == "os.mkdir":
-            mode = _last_arg(call, src)
+            mode = _last_arg(call, bsrc)
             if _is_0777(mode):
                 findings.append(_ev(
                     "perms.world_writable_dir", "世界可写目录", "high", path, line,
                     f"目录创建权限 {mode} 世界可写", "使用 0o700", "permissions"))
 
 
-_PY_STATIC_STRING = re.compile(r'^(["\'])(.*?)\1$', re.S)
+_PY_STATIC_STRING = re.compile(r'^([bfrBF]{0,2})(["\'])(.*?)\2$', re.S)
 
 
 def _py_static_string(txt: str) -> str | None:
     """Value of a static quoted Python string literal; ``None`` otherwise.
 
-    ``None`` covers identifiers, attribute access (``hashlib.md5``), prefix
-    strings (``f"..."``, ``b"..."``) and concatenations -- all either
-    unverifiable statically or handled by the regex fallback.
+    Identifiers, attribute access (``hashlib.md5``), prefixed strings
+    (``f"..."``, ``b"..."``) and concatenations are treated as None, either
+    because they are unverifiable statically (dynamic f-strings / bytes hold
+    runtime bytes) or because they are handled by the regex fallback.  Callers
+    that need raw bytes/pickle literals (a fixed IV is a raw byte constant)
+    pass ``allow_prefix=True``.
     """
     m = _PY_STATIC_STRING.match(txt.strip())
-    return m.group(2) if m else None
+    if not m:
+        return None
+    if m.group(1):
+        return None
+    return m.group(3)
 
 
-def _py_positional_args(call, src):
+def _py_static_value(txt: str) -> str | None:
+    """Value of a static string literal, allowing bytes/raw prefix.
+
+    Unlike ``_py_static_string``, accepts ``b'...'`` (and other byte prefixes)
+    and returns the decoded literal value, so raw IV constants compare as
+    ``b'0123456789abcdef'``.  f-strings (any prefix carrying ``f``) are
+    rejected: their ``{...}`` interpolation makes them dynamic.
+    """
+    m = _PY_STATIC_STRING.match(txt.strip())
+    if not m:
+        return None
+    if "f" in m.group(1).lower():
+        return None
+    return m.group(3)
+
+
+def _py_positional_args(call, bsrc):
     """Source texts of the positional (non-keyword) named arguments."""
     args = call.child_by_field_name("arguments")
     if args is None:
         return []
-    return [src[a.start_byte:a.end_byte]
+    return [_bstr(bsrc, a.start_byte, a.end_byte)
             for a in args.named_children
             if a.type not in ("keyword_argument", "keyed_element", "list_splat", "dictionary_splat")]
 
 
-def _find_kw_literal(call, src, names):
+def _find_kw_literal(call, bsrc, names):
     args = call.child_by_field_name("arguments")
     if args is None:
         return None
@@ -297,14 +352,14 @@ def _find_kw_literal(call, src, names):
             val = a.child_by_field_name("value")
             if kw is None or val is None:
                 continue
-            kwname = src[kw.start_byte:kw.end_byte]
+            kwname = _bstr(bsrc, kw.start_byte, kw.end_byte)
             if kwname in names:
-                vtxt = src[val.start_byte:val.end_byte]
+                vtxt = _bstr(bsrc, val.start_byte, val.end_byte)
                 return (vtxt, kw, val)
     return None
 
 
-def _arg_literal(call, src):
+def _arg_literal(call, bsrc):
     args = call.child_by_field_name("arguments")
     if args is None:
         return None
@@ -312,7 +367,7 @@ def _arg_literal(call, src):
     if not named:
         return None
     first = named[0]
-    return src[first.start_byte:first.end_byte]
+    return _bstr(bsrc, first.start_byte, first.end_byte)
 
 
 def _is_literal_scalar(txt: str) -> bool:
@@ -326,7 +381,7 @@ def _is_literal_scalar(txt: str) -> bool:
     return t.lstrip("-").isdigit()
 
 
-def _last_arg(call, src):
+def _last_arg(call, bsrc):
     args = call.child_by_field_name("arguments")
     if args is None:
         return ""
@@ -334,7 +389,7 @@ def _last_arg(call, src):
     if not named:
         return ""
     last = named[-1]
-    return src[last.start_byte:last.end_byte]
+    return _bstr(bsrc, last.start_byte, last.end_byte)
 
 
 def _is_0777(mode: str) -> bool:
@@ -398,9 +453,10 @@ def _has_external_input(call, src, args) -> bool:
 def analyze_jsts(path, src, findings):
     tree = parse(src, "typescript" if path.endswith((".ts", ".tsx", ".mts", ".cts")) else "javascript")
     root = tree.root_node
+    bsrc = src.encode("utf-8", errors="surrogatepass")
     for call in collect_calls(root, src):
-        fn = call_fn_name(call, src)
-        args = args_text(call, src)
+        fn = call_fn_name(call, bsrc)
+        args = args_text(call, bsrc)
         line = _line_for(call)
 
         # crypto.createHash('md5') / `sha1` / "md5" and createHmac (any
@@ -429,6 +485,27 @@ def analyze_jsts(path, src, findings):
                 "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
                 f"使用 ECB 加密模式: {fn}({args})", "改用 GCM", "crypto"))
 
+        # node crypto cipher: positional literal IV.  createCipheriv(alg, key,
+        # iv) / createDecipheriv(alg, key, iv) -- an IV that is a static string
+        # in source is fixed across runs.
+        if fn.endswith((".createCipheriv", ".createDecipheriv")) \
+                or fn in ("createCipheriv", "createDecipheriv"):
+            cargs = _js_positional_args(call, bsrc)
+            if len(cargs) >= 3 and _js_plain_string(cargs[2]) is not None:
+                findings.append(_ev(
+                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
+                    f"加密调用 {fn} 使用固定 IV {cargs[2].strip()}", "每次加密生成随机 IV (crypto.randomBytes)", "crypto"))
+
+        # weak KDF: too few PBKDF2 iterations (< 100k) makes brute forcing
+        # cheap. Both sync and async node crypto forms put iterations third;
+        # Python's hashlib.pbkdf2_hmac puts it fourth.
+        if fn.endswith(".pbkdf2Sync") or fn in ("pbkdf2Sync",):
+            cargs = _js_positional_args(call, bsrc)
+            if len(cargs) >= 3 and _py_static_int(cargs[2]) is not None \
+                    and _py_static_int(cargs[2]) < 100000:
+                findings.append(_ev(
+                    "crypto.weak_kdf", "弱密钥派生 (KDF 迭代过少)", "medium", path, line,
+                    f"PBKDF2 迭代次数过少: {cargs[2].strip()}", "使用 >= 100000 次迭代 (如 310000)", "crypto"))
         # DES usage in JS crypto
         if fn in ("des.createCipheriv", "des.createCipher") or "DES" in fn:
             findings.append(_ev(
@@ -475,7 +552,7 @@ def analyze_jsts(path, src, findings):
 
         # chmod 0777 (node fs)
         if fn == "fs.chmod" or fn.endswith(".chmod") or fn == "chmodSync":
-            mode = _last_arg(call, src)
+            mode = _last_arg(call, bsrc)
             m = mode.replace("0o", "").replace("0x", "")
             if mode in ("0o777", "777") or "0o666" in mode:
                 findings.append(_ev(
@@ -493,15 +570,59 @@ def analyze_jsts(path, src, findings):
     # Function constructor can execute a string body at runtime, so scan those
     # nodes on their own pass.
     for new_expr in collect_new_expressions(root):
-        ctor = new_expression_name(new_expr, src)
+        ctor = new_expression_name(new_expr, bsrc)
         if ctor != "Function":
             continue
-        body = args_text(new_expr, src)
+        body = args_text(new_expr, bsrc)
         if not _js_external(body):
             continue
         findings.append(_ev(
             "deser.eval", "eval 外部输入", "critical", path, _line_for(new_expr),
             f"new Function 处理外部输入: {body}", "重构，不使用 Function 构造器", "deserialization"))
+
+
+# --- shared static-literal/int helpers --------------------------------------
+
+def _py_static_int(txt: str) -> int | None:
+    """Value of a static Python integer literal; ``None`` otherwise.
+
+    Accepts plain digits and Python numeric separators (``100_000``); rejects
+    identifiers, arithmetic expressions and any dotted/negative junk so a
+    dynamic iteration count never flags.
+    """
+    t = txt.strip().replace("_", "")
+    if t.isdigit():
+        return int(t)
+    return None
+
+
+def _js_positional_args(call, bsrc):
+    """Source texts of the positional (non-keyword) JS/TS arguments.
+
+    JS has no keyword arguments; this simply skips the comment nodes that
+    tree-sitter keeps as named children of ``arguments``.
+    """
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return []
+    return [_bstr(bsrc, a.start_byte, a.end_byte)
+            for a in args.named_children
+            if a.type not in ("comment",)]
+
+
+_JS_PLAIN_STRING = re.compile(r"^(['\"])(.*?)\1$", re.S)
+
+
+def _js_plain_string(txt: str) -> str | None:
+    """Value of a static single/double-quoted JS string literal; ``None`` otherwise.
+
+    Backtick templates and identifiers are rejected: templates with ``${...}``
+    are dynamic, and an identifier's value is unknowable statically.  Used for
+    the positional IV argument of ``createCipheriv`` where only a plain quoted
+    constant proves the IV is fixed.
+    """
+    m = _JS_PLAIN_STRING.match(txt.strip())
+    return m.group(2) if m else None
 
 
 def _fn_is_db_query(fn: str) -> bool:

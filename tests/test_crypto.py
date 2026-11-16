@@ -152,8 +152,9 @@ class TestNamedWeakDigestHelpers:
 
     def test_pbkdf2_sha1_prf_is_quiet(self):
         # PBKDF2 using SHA-1 as an HMAC PRF is not a collision-prone direct
-        # hash and predates no detection; do not regress it.
-        finds = _js('crypto.pbkdf2Sync("x", salt, 10000, 64, "sha1")\n')
+        # hash and predates no detection; do not regress it.  Iterations stay
+        # far above the <100k weak-KDF threshold so only the PRF is exercised.
+        finds = _js('crypto.pbkdf2Sync("x", salt, 300000, 64, "sha1")\n')
         assert finds == []
 
 
@@ -211,6 +212,151 @@ class TestPythonHmacDigestArgs:
         assert finds[0].dimension == "crypto"
         assert finds[0].severity == "high"
         assert "sha256" in finds[0].fix
+
+
+class TestJsFixedIv:
+    """createCipheriv(alg, key, iv) / createDecipheriv with a static-literal
+    IV: the IV is fixed across runs (crypto.fixed_iv)."""
+
+    def test_create_cipheriv_static_iv_flags(self):
+        finds = _js('crypto.createCipheriv("aes-256-cbc", key, "0123456789abcdef")\n')
+        assert [(f.rule_id, f.severity) for f in finds] == \
+            [("crypto.fixed_iv", "high")]
+
+    def test_create_decipheriv_static_iv_flags(self):
+        # JS has no b'' byte literals; the static quoted form is what a
+        # Buffer.from(iv, 'utf8') call site typically passes.
+        finds = _js("crypto.createDecipheriv('aes-256-cbc', key, '0123456789abcdef')\n")
+        assert [f.rule_id for f in finds] == ["crypto.fixed_iv"]
+
+    def test_single_quote_buffer_iv_flags(self):
+        finds = _js("crypto.createCipheriv('aes-256-cbc', key, 'abcdef')\n")
+        assert [f.rule_id for f in finds] == ["crypto.fixed_iv"]
+
+    def test_dynamic_iv_is_quiet(self):
+        finds = _js("crypto.createCipheriv('aes-256-cbc', key, crypto.randomBytes(16))\n")
+        assert finds == []
+
+    def test_variable_iv_is_quiet(self):
+        finds = _js("crypto.createCipheriv('aes-256-cbc', key, iv)\n")
+        assert finds == []
+
+    def test_template_literal_iv_is_quiet(self):
+        # Backtick templates may carry ${...} interpolation; not provably fixed.
+        finds = _js('crypto.createCipheriv(\'aes-256-cbc\', key, `abcdef`)\n')
+        assert finds == []
+
+
+class TestPyFixedIv:
+    """Python AES.new(key, mode, iv): the dedicated positional IV argument,
+    and the iv=/nonce= keyword form, when the value is a static constant."""
+
+    def test_positional_bytes_iv_flags(self):
+        finds = _py('cipher = AES.new(key, AES.MODE_CBC, b"0123456789abcdef")\n')
+        assert [(f.rule_id, f.severity) for f in finds] == \
+            [("crypto.fixed_iv", "high")]
+
+    def test_positional_str_iv_flags(self):
+        finds = _py("cipher = AES.new(key, AES.MODE_CBC, '0123456789abcdef')\n")
+        assert [f.rule_id for f in finds] == ["crypto.fixed_iv"]
+
+    def test_keyword_literal_iv_flags(self):
+        finds = _py('cipher = AES.new(key, AES.MODE_CBC, iv=b"0123456789abcdef")\n')
+        assert [f.rule_id for f in finds] == ["crypto.fixed_iv"]
+
+    def test_keyword_variable_iv_is_quiet(self):
+        finds = _py('nonce = secrets.token_bytes(12)\n'
+                    'cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)\n')
+        assert finds == []
+
+    def test_positional_variable_iv_is_quiet(self):
+        finds = _py("cipher = AES.new(key, AES.MODE_CBC, iv_var)\n")
+        assert finds == []
+
+    def test_fstring_iv_is_quiet(self):
+        finds = _py('cipher = AES.new(key, AES.MODE_CBC, f"{prefix}x")\n')
+        assert finds == []
+
+
+class TestJsWeakKdf:
+    """pbkdf2Sync(pw, salt, iterations, keylen, digest): fewer than 100k
+    iterations makes brute-forcing cheap."""
+
+    def test_low_iterations_flags(self):
+        finds = _js('crypto.pbkdf2Sync(pw, salt, 10000, 64, "sha256")\n')
+        assert [(f.rule_id, f.severity) for f in finds] == \
+            [("crypto.weak_kdf", "medium")]
+
+    def test_high_iterations_is_quiet(self):
+        finds = _js('crypto.pbkdf2Sync(pw, salt, 310000, 64, "sha256")\n')
+        assert finds == []
+
+    def test_dynamic_iterations_is_quiet(self):
+        finds = _js("crypto.pbkdf2Sync(pw, salt, iters, 64, 'sha256')\n")
+        assert finds == []
+
+
+class TestPyWeakKdf:
+    """hashlib.pbkdf2_hmac(hash, password, salt, iterations, ...): iterations
+    is the fourth positional argument."""
+
+    def test_low_iterations_flags(self):
+        finds = _py('dk = hashlib.pbkdf2_hmac("sha256", pw, salt, 1000)\n')
+        assert [(f.rule_id, f.severity) for f in finds] == \
+            [("crypto.weak_kdf", "medium")]
+
+    def test_underscore_separated_low_iterations_flags(self):
+        finds = _py('dk = hashlib.pbkdf2_hmac("sha256", pw, salt, 10_000)\n')
+        assert [f.rule_id for f in finds] == ["crypto.weak_kdf"]
+
+    def test_100k_underscore_is_quiet(self):
+        finds = _py('dk = hashlib.pbkdf2_hmac("sha256", pw, salt, 100_000)\n')
+        assert finds == []
+
+    def test_high_iterations_is_quiet(self):
+        finds = _py('dk = hashlib.pbkdf2_hmac("sha256", pw, salt, 310000)\n')
+        assert finds == []
+
+    def test_dynamic_iterations_is_quiet(self):
+        finds = _py('dk = hashlib.pbkdf2_hmac("sha256", pw, salt, iterations)\n')
+        assert finds == []
+
+
+class TestNonAsciiByteOffsets:
+    """tree-sitter reports byte offsets into the UTF-8 encoding; slicing the
+    Python str with them corrupted every span after a non-ASCII character.
+    These snippets put a multi-byte character before the vulnerable call."""
+
+    def test_python_em_dash_before_md5_call_still_flags(self):
+        code = ('"""App内联摘要 — 必须检出。"""\n'
+                "import hashlib\n"
+                "h = hashlib.md5(b'x')\n")
+        finds = _py(code)
+        assert ("crypto.md5_or_sha1", 3) in [(f.rule_id, f.line) for f in finds]
+
+    def test_python_chinese_before_fixed_iv_still_flags(self):
+        code = ("# 用户数据加密常量\n"
+                'cipher = AES.new(key, AES.MODE_CBC, b"0123456789abcdef")\n')
+        finds = _py(code)
+        assert ("crypto.fixed_iv", 2) in [(f.rule_id, f.line) for f in finds]
+
+    def test_python_chinese_before_pbkdf2_still_flags(self):
+        code = ('# 弱口令哈希\n'
+                'dk = hashlib.pbkdf2_hmac("sha256", pw, salt, 1000)\n')
+        finds = _py(code)
+        assert ("crypto.weak_kdf", 2) in [(f.rule_id, f.line) for f in finds]
+
+    def test_js_em_dash_before_cipheriv_still_flags(self):
+        code = ('// Token 加密 — 注意 IV 安全\n'
+                "crypto.createCipheriv('aes-256-cbc', key, '0123456789abcdef')\n")
+        finds = _js(code)
+        assert ("crypto.fixed_iv", 2) in [(f.rule_id, f.line) for f in finds]
+
+    def test_js_chinese_comment_before_createhash_still_flags(self):
+        code = ('// 生成摘要用来校验长度\n'
+                'crypto.createHash("md5")\n')
+        finds = _js(code)
+        assert ("crypto.md5_or_sha1", 2) in [(f.rule_id, f.line) for f in finds]
 
 
 class TestE2EFixtureLock:
