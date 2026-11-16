@@ -37,6 +37,23 @@ class TestDomSink:
         # Reading the property back must not be treated as a sink.
         assert _analyze("const x = banner.innerHTML;\n") == []
 
+    def test_jquery_html_setter_is_a_sink(self):
+        # jQuery's .html() is an innerHTML setter; a DOM-XSS sink.
+        found = _analyze("$('#box').html(userInput);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_jquery_html_concat_is_a_sink(self):
+        found = _analyze("$('#box').html('<b>' + name + '</b>');\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_jquery_html_getter_is_not_a_sink(self):
+        # Reading content back with the no-argument getter form is a read.
+        assert _analyze("const content = $('#box').html();\n") == []
+
+    def test_jquery_text_is_not_a_sink(self):
+        # .text() escapes; it is the safe counterpart of .html().
+        assert _analyze("$('#box').text(userInput);\n") == []
+
     def test_findings_carry_xss_dimension_and_fix(self):
         found = _analyze("banner.innerHTML = html;\n")
         assert len(found) == 1

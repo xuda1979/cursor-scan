@@ -16,9 +16,13 @@ from typing import List
 from ..models import Evidence
 from .helpers import code_lines
 
-# Property assignments / calls that write raw HTML into the DOM.
+# Property assignments / calls that write raw HTML into the DOM.  jQuery's
+# ``.html(arg)`` is an innerHTML setter and a documented DOM-XSS sink, so it
+# belongs here too; the empty-argument ``.html()`` getter form (a read) and
+# ``.innerHTML`` reads are left alone.
 RE_DOM_SINK = re.compile(
-    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]",
+    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]"
+    r"|\.html\s*\(\s*[^)]",
     re.I,
 )
 # React template: dangerouslySetInnerHTML={{ __html: ... }}
