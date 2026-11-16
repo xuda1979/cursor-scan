@@ -21,6 +21,12 @@ def get_user_v2(conn, username: str):
     return cur.fetchall()
 
 
+def get_user_v3(conn, username: str):
+    cur = conn.cursor()
+    cur.execute(f"SELECT * FROM users WHERE name = '{username}'")
+    return cur.fetchall()
+
+
 def list_backup(log_dir: str):
     grep = os.system("grep -r error " + log_dir + "/ > out.txt")
     return grep

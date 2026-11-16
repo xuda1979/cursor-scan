@@ -7,6 +7,8 @@ check is ambiguous (e.g. fixed IV, ECB) we fall back to line-oriented regex.
 
 from __future__ import annotations
 
+import re
+
 import tree_sitter_javascript
 import tree_sitter_python
 import tree_sitter_typescript
@@ -294,8 +296,31 @@ def _contains_sql(args: str) -> bool:
                                            "SELECT", "INSERT", "UPDATE", "DELETE"))
 
 
+def _has_fstring_interp(args: str) -> bool:
+    """True if ``args`` contains a Python f-string with ``{...}`` interpolation.
+
+    Escaped literal braces (``{{ }}``) do not count as interpolation, so a
+    constant f-string is left alone.  The scan is line-narrowed to the f-string
+    body via ``re.S`` so embedded quotes/format specs inside the braces do not
+    cut the match short.
+    """
+    for m in re.finditer(r'f(["\'])(.*?)\1', args, re.S):
+        body = re.sub(r'\{\{.*?\}\}', "", m.group(2))
+        if "{" in body:
+            return True
+    return False
+
+
 def _has_concat(args: str) -> bool:
-    return (" + " in args or "+" in args or "%s" in args and " % " in args)
+    if " + " in args or "+" in args or "%s" in args and " % " in args:
+        return True
+    # F-string / template-literal interpolation is the most common SQL
+    # injection idiom in AI-generated code (e.g. ``execute(f"...{x}")``).
+    if _has_fstring_interp(args):
+        return True
+    if "`" in args and "${" in args:
+        return True
+    return False
 
 
 def _has_external_input(call, src, args) -> bool:
