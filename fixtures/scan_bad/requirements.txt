@@ -1,0 +1,5 @@
+# Vulnerable dependency pins for P3 dependency-risk fixture
+jinja2==2.10.1
+pyyaml==5.1
+flask==0.12.2
+requests==2.19.1

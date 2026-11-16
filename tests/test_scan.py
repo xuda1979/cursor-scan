@@ -28,6 +28,8 @@ BAD_EXPECTED = [
                     "secrets.hardcoded_key"}),
     ("weak_crypto.py", {"crypto.md5_or_sha1", "crypto.weak_cipher_des", "crypto.ecb_mode",
                         "crypto.fixed_iv", "crypto.hardcoded_seed"}),
+    ("requirements.txt", {"deps.known_vulnerable"}),
+    ("package.json", {"deps.known_vulnerable"}),
 ]
 
 

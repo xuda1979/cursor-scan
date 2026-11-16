@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .models import Evidence, ScanResult, Scorecard
-from .rules import access_control, crypto, deserialization, injection, permissions, secrets
+from .rules import (access_control, crypto, deps, deserialization, injection,
+                    permissions, secrets)
 from .scanners import ast as ast_scanners
 
 # Directories always skipped, regardless of ignore files.
@@ -130,10 +131,12 @@ def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
         except Exception as exc:
             findings.append(_internal_error(path_of(root, rel), exc))
 
-    # Regex fallback + secret rules apply to every text file.
+    # Regex fallback + secret rules apply to every text file; dependency-
+    # manifest rules (requirements*.txt / package.json) are per-file too.
     for runner in (crypto, injection, deserialization, permissions):
         findings.extend(runner.analyze_code(path_of(root, rel), src))
     findings.extend(secrets.analyze_code(path_of(root, rel), src))
+    findings.extend(deps.analyze_code(path_of(root, rel), src))
 
 
 def path_of(root: str, rel: str) -> str:

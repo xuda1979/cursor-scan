@@ -16,6 +16,7 @@ DIMENSIONS = [
     "injection",
     "permissions",
     "access_control",
+    "dependencies",
 ]
 
 DIMENSION_LABELS = {
@@ -25,6 +26,7 @@ DIMENSION_LABELS = {
     "injection": "注入",
     "permissions": "文件权限",
     "access_control": "访问控制",
+    "dependencies": "依赖风险",
 }
 
 

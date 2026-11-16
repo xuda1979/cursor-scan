@@ -1,0 +1,14 @@
+{
+  "name": "vuln-sample",
+  "version": "0.1.0",
+  "dependencies": {
+    "lodash": "4.17.20",
+    "minimist": "1.2.5",
+    "axios": "0.21.1",
+    "moment": "2.29.3",
+    "yargs-parser": "18.1.1"
+  },
+  "devDependencies": {
+    "crypto-js": "4.0.0"
+  }
+}
