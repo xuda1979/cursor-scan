@@ -1,0 +1,98 @@
+软件著作权登记表
+
+一、软件基本信息
+1.  软件全称     ：cursor-scan 本地安全债扫描软件
+2.  软件简称     ：cursor-scan
+3.  版本号       ：V1.0
+4.  软件分类     ：工具软件（应用软件 / 开发与测试工具）
+5.  开发完成日期 ：2026年11月16日
+6.  首次发表日期 ：未发表
+7.  著作权人     ：xuda1979
+8.  权利取得方式 ：原始取得
+9.  权利范围     ：全部权利
+10. 软件用途     ：面向个人开发者与小型团队的本地静态安全扫描工具，对
+    「vibe-code」项目（含 AI 生成代码的项目）进行安全体检，输出逐项证据、
+    健康度评分卡与修复建议，并可用作 CI 门禁。
+
+二、开发情况声明
+   本软件由著作权人 xuda1979 独立开发完成，未委托他人开发，未利用他人
+   既有软件，全部源代码与文档均由作者独立编写。开发过程未使用任何他人
+   受著作权保护的代码片段；对通用开发语言、公开算法与库函数的引用符合
+   相关开源许可证（MIT）要求。特此声明。
+
+三、技术信息
+1.  编程语言       ：Python（3.10+）
+2.  源程序文件总数 ：20 个（不含测试）
+3.  源程序总行数   ：1905 行（去除空行与注释后）
+4.  开发环境       ：Linux（64 位）；Python 3.10–3.12；tree-sitter 解析库
+    及其 Python 语言包（tree-sitter-python / tree-sitter-javascript /
+    tree-sitter-typescript）；文本编辑器；命令行工具链。
+5.  运行环境       ：
+    最低配置：Intel/AMD x86_64 单核 CPU、1 GB 内存、100 MB 可用磁盘空间。
+    软件环境：Windows / Linux / macOS 桌面系统（64 位）；Python 3.10 及
+    以上解释器；无需网络、无需 GPU。
+6.  主要依赖库     ：tree-sitter（≥0.26）、tree-sitter-python、
+    tree-sitter-javascript、tree-sitter-typescript。
+7.  程序构成       ：
+    (1) cursorscan/cli.py          —— 命令行入口、参数解析、文本/JSON/SARIF 输出与退出码门禁
+    (2) cursorscan/scan.py         —— 扫描编排：文件发现、规则调度、评分汇总
+    (3) cursorscan/scanners/ast.py —— tree-sitter AST 扫描器（Python / JS / TS）
+    (4) cursorscan/rules/          —— 规则引擎包（弱密码学、秘密、反序列化、注入、权限、访问控制、依赖、XSS）
+    (5) cursorscan/models.py       —— 数据模型（Evidence / ScanResult / Scorecard）
+    (6) cursorscan/history.py      —— 历史快照持久化与两次扫描对比
+    (7) cursorscan/webapp.py       —— 离线 Web 仪表板（stdlib http.server）
+    (8) cursorscan/ignore.py       —— 发现抑制规则（--ignore / 配置文件）
+
+四、主要功能
+1.  本地项目扫描：遍历目标目录，自动跳过版本库、依赖目录、二进制与超大
+    文件，对全部文本文件执行静态分析。
+2.  八维安全规则引擎：
+    (1) 弱密码学（crypto）：MD5/SHA-1 弱哈希、DES 弱加密、ECB 模式、
+        固定 IV/nonce、硬编码随机种子；
+    (2) 硬编码秘密（secrets）：AWS 密钥、Slack/GitHub/Google/Stripe
+        令牌、私钥块、通用密钥赋值；
+    (3) 不安全反序列化（deserialization）：pickle、不安全 yaml.load、
+        eval/exec 处理外部输入；
+    (4) 注入（injection）：SQL 字符串拼接、shell 拼接、shell=True；
+    (5) 文件权限（permissions）：chmod 0777/0666、写入 /tmp 无校验、
+        世界可写目录；
+    (6) 访问控制（access_control）：缺鉴权路由（Flask/FastAPI/Express）；
+    (7) 依赖风险（dependencies）：requirements*.txt / package.json 中
+        已知漏洞版本（离线 CVE 表）与未固定版本；
+    (8) 跨站脚本（xss）：innerHTML 等 DOM 写入、React
+        dangerouslySetInnerHTML、document.write、Jinja 模板关闭转义。
+3.  健康度评分卡：各维度从 100 分起按严重度加权扣分（低 5 / 中 12 / 高
+    20 / 严重 30），总分取各维度均分，等级 A/B/C/D/F，结果完全可解释。
+4.  逐项证据输出：每条发现均给出规则号、文件:行号、代码片段、严重度、
+    风险说明与修复建议（中文），保证可审计。
+5.  多格式输出：text / JSON / SARIF 2.1.0。
+6.  CI 门禁：--fail-on 指定严重度阈值，命中即退出码 1；用法/环境错误
+    退出码 2。
+7.  历史与差异：每次扫描保存 JSON 快照，支持列表与两次扫描差异视图
+    （新增 / 修复 / 仍在 / 忽略 / 取消忽略）。
+8.  离线 Web 仪表板：基于 Python 标准库 http.server，本地查看历史列表、
+    单快照详情与对比，全程离线运行，含路径穿越防护与输出转义。
+9.  忽略机制：--ignore 与 .cursor-scan.json 配置文件双来源，支持按规则
+    号、文件名、相对路径及 行号 精确抑制。
+
+五、创新点
+1.  面向 AI 生成代码（vibe-code）的「安全债」定位：规则与提示文案面向
+    AI 生成代码最常见的安全隐患（弱哈希、硬编码密钥、缺鉴权路由等），
+    与通用 SAST 工具形成差异化。
+2.  零依赖运行：核心扫描除 tree-sitter 解析库外零第三方依赖；Web 仪表板
+    完全基于 Python 标准库实现，可完全离线、无网络、无 GPU（低算力守则）。
+3.  AST 与正则双引擎：Python / JS / TS 使用 tree-sitter AST 精确匹配
+    调用表达式，其他语言与不可解析片段回退到字符串感知的正则引擎；
+    行规约器先剔除字符串字面量外的注释与文档串，显著降低误报。
+4.  可解释评分体系：扣分权重与维度划分公开透明，每条发现带 file:line、
+    代码片段与中文修复建议，评分结果可逐项审计。
+5.  项目级跨文件规则：访问控制检测以整个项目为分析单位——先判断项目是
+    否存在鉴权机制，再对未鉴权路由逐一标记，避免把无鉴权要求的纯脚本
+    项目误报。
+6.  快照差异语义精确：两扫描差异区分「修复」与「忽略」，被 --ignore 抑制
+    的发现不会冒充已修复的问题，保证 CI 与审计报告的准确性。
+
+六、登记信息
+   登记号       ：（留空，待中国版权保护中心核发）
+   登记日期     ：
+   证书编号     ：

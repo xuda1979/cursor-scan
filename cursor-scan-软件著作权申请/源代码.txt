@@ -1,0 +1,3189 @@
+﻿软件名称：cursor-scan 本地安全债扫描软件
+版本号：V1.0
+源程序总行数：1905 行（去除空行与注释）
+排版：A4 纵向，页眉「cursor-scan V1.0」左对齐，正文宋体五号，每页 50 行，页脚标注页码。
+
+
+cursor-scan V1.0
+
+# ----- 文件: __init__.py (1 行) -----
+__version__ = "1.0.0"
+# ----- 文件: __main__.py (4 行) -----
+from __future__ import annotations
+from .cli import main
+if __name__ == "__main__":
+    raise SystemExit(main())
+# ----- 文件: cli.py (239 行) -----
+from __future__ import annotations
+import argparse
+import json
+import os
+import sys
+from typing import Dict, List, Optional
+from . import __version__
+from .history import (diff_snapshots, list_history, load_snapshot,
+                      resolve_snapshot, result_to_dict, save_snapshot)
+from .ignore import compile_ignores
+from .models import Evidence, ScanResult, SEVERITY_ORDER
+from .scan import ScanOptions, scan_project
+SEVERITY_NAMES = ("low", "medium", "high", "critical")
+SARIF_VERSION = "2.1.0"
+SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
+TOOL_NAME = "cursor-scan"
+def _arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="cursor-scan",
+        description="Local security-debt scanner for vibe-coded projects.",
+    )
+    p.add_argument("path", nargs="?", default=".", help="project directory to scan")
+    p.add_argument(
+        "--format", choices=("text", "json", "sarif"), default="text",
+        help="output format (default: text)",
+    )
+    p.add_argument(
+        "--fail-on", choices=SEVERITY_NAMES, default="high",
+        help="exit 1 when findings at/above this severity exist (default: high)",
+    )
+    p.add_argument(
+        "--ignore", action="append", default=[], metavar="PATTERN",
+        help="suppress matching findings; repeatable. A glob matches the rule id, "
+             "Patterns can also be listed as \"ignore\" in .cursor-scan.json",
+    )
+    p.add_argument(
+        "--max-bytes", type=int, default=2 * 1024 * 1024,
+        help="skip source files larger than this many bytes (default: 2 MiB)",
+    )
+    p.add_argument(
+        "--history-dir", default=None,
+        help="directory for scan snapshots (default: ./history)",
+第 1 页 共 60 页
+cursor-scan V1.0
+
+    )
+    p.add_argument(
+        "--no-save", action="store_true",
+        help="do not write a snapshot to the history directory",
+    )
+    p.add_argument(
+        "--history", action="store_true",
+        help="list saved scan snapshots instead of scanning",
+    )
+    p.add_argument(
+        "--diff", nargs=2, metavar=("BEFORE", "AFTER"),
+        help="compare two saved snapshots (target slug or file path)",
+    )
+    p.add_argument(
+        "--serve", action="store_true",
+        help="serve the offline web dashboard over scanning history",
+    )
+    p.add_argument("--host", default="127.0.0.1", help="dashboard bind host")
+    p.add_argument("--port", type=int, default=8080, help="dashboard bind port")
+    p.add_argument("--version", action="version", version=f"cursor-scan {__version__}")
+    return p
+def _env_toggle(name: str) -> bool:
+    val = os.environ.get(name, "")
+    return val.strip().lower() in ("1", "true", "yes", "on")
+def main(argv: List[str] | None = None) -> int:
+    args = _arg_parser().parse_args(argv)
+    options = ScanOptions(max_bytes=args.max_bytes,
+                          ignore_patterns=compile_ignores(args.ignore))
+    if args.history:
+        return _cmd_history(args.history_dir)
+    if args.serve:
+        return _cmd_serve(args.history_dir, args.host, args.port)
+    if args.diff:
+        try:
+            before = load_snapshot(resolve_snapshot(args.diff[0], args.history_dir))
+            after = load_snapshot(resolve_snapshot(args.diff[1], args.history_dir))
+        except FileNotFoundError as exc:
+            print(f"cursor-scan: {exc}", file=sys.stderr)
+            return 2
+        print_diff(diff_snapshots(before, after))
+        return 0
+    try:
+        result = scan_project(args.path, options)
+    except NotADirectoryError as exc:
+        print(f"cursor-scan: {exc}", file=sys.stderr)
+        return 2
+    except PermissionError as exc:
+        print(f"cursor-scan: 无权限读取目标: {exc}", file=sys.stderr)
+        return 2
+    saved = None
+第 2 页 共 60 页
+cursor-scan V1.0
+
+    if not args.no_save:
+        try:
+            saved = save_snapshot(result, args.history_dir)
+        except OSError as exc:
+            print(f"cursor-scan: 警告: 保存历史快照失败: {exc}", file=sys.stderr)
+    if args.format == "json":
+        print(json.dumps(result_to_dict(result), ensure_ascii=False, indent=2))
+    elif args.format == "sarif":
+        print(json.dumps(result_to_sarif(result), ensure_ascii=False, indent=2))
+    else:
+        print_text_report(result)
+        if saved:
+            print(f"\n历史: 快照已保存到 {saved}  (--history 查看, --diff 比较)")
+    threshold = SEVERITY_ORDER[args.fail_on]
+    gate_findings = [f for f in result.findings if SEVERITY_ORDER[f.severity] >= threshold]
+    if gate_findings:
+        return 1
+    return 0
+def _cmd_history(history_dir: Optional[str]) -> int:
+    entries = list_history(history_dir)
+    if not entries:
+        print("没有保存的扫描历史。")
+        return 1
+    print(f"{len(entries)} 条扫描历史 (最新在前):\n")
+    for e in entries:
+        print(f"  {e.describe()}")
+    print("\n比较: cursor-scan --diff <before> <after>")
+    return 0
+def _cmd_serve(history_dir: Optional[str], host: str, port: int) -> int:
+    from .history import default_history_dir
+    from .webapp import run_dashboard
+    hd = history_dir or default_history_dir()
+    try:
+        return run_dashboard(hd, host=host, port=port)
+    except OSError as exc:
+        print(f"cursor-scan: 无法启动仪表板 ({host}:{port}): {exc}",
+              file=sys.stderr)
+        return 2
+def print_diff(diff) -> None:
+    delta = diff.score_delta
+    sign = "+" if delta > 0 else ""
+    print(f"评分: {diff.before.get('score', '?')} -> {diff.after.get('score', '?')} "
+          f"({sign}{delta})  等级: {diff.before.get('grade', '?')} -> "
+          f"{diff.after.get('grade', '?')}")
+    print(f"新增 {len(diff.added)} 项, 修复 {len(diff.fixed)} 项, "
+          f"仍在 {len(diff.kept)} 项")
+    if diff.suppressed:
+        print(f"忽略 {len(diff.suppressed)} 项 (后一次扫描中被 --ignore 抑制)\n")
+    for label, items in (("新增", diff.added), ("修复", diff.fixed),
+                         ("忽略", diff.suppressed), ("取消忽略", diff.unsuppressed)):
+第 3 页 共 60 页
+cursor-scan V1.0
+
+        for f in items:
+            sev = f.get("severity", "?")
+            print(f"  [{label}] [{sev.upper():<8}] {f.get('rule_id')}  "
+                  f"{f.get('file')}:{f.get('line')}  {f.get('message')}")
+def result_to_sarif(result: ScanResult) -> dict:
+    rules = _sarif_rules(result.findings)
+    results = []
+    for f in result.findings:
+        region = {}
+        if f.line > 0:
+            region["startLine"] = f.line
+        if f.code_snippet:
+            region["snippet"] = {
+                "text": f.code_snippet.replace("]]>", "]]]]><![CDATA[>")
+            }
+        results.append({
+            "ruleId": f.rule_id,
+            "level": {"critical": "error", "high": "error",
+                      "medium": "warning", "low": "note"}[f.severity],
+            "message": {"text": f.message},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": f.file},
+                    "region": region,
+                }
+            }],
+            "properties": {
+                "severity": f.severity,
+                "dimension": f.dimension,
+                "fix": f.fix,
+                "title": f.title,
+            },
+        })
+    return {
+        "$schema": SARIF_SCHEMA,
+        "version": SARIF_VERSION,
+        "runs": [{
+            "tool": {"driver": {"name": TOOL_NAME, "version": __version__, "rules": rules}},
+            "results": results,
+            "invocations": [{
+                "executionSuccessful": True,
+                "startTimeUtc": result.started_at,
+                "endTimeUtc": result.started_at,
+                "properties": {
+                    "score": result.score,
+                    "grade": result.grade,
+                    "scanned_files": result.scanned_files,
+                },
+            }],
+        }],
+第 4 页 共 60 页
+cursor-scan V1.0
+
+    }
+def _sarif_rules(findings: List[Evidence]) -> List[dict]:
+    seen: Dict[str, dict] = {}
+    for f in findings:
+        if f.rule_id in seen:
+            continue
+        seen[f.rule_id] = {
+            "id": f.rule_id,
+            "name": f.rule_id,
+            "shortDescription": {"text": f.title},
+            "help": {"text": f.fix, "markdown": f.fix},
+            "defaultConfiguration": {"level": "error"},
+            "properties": {"dimension": f.dimension},
+        }
+    return list(seen.values())
+def print_text_report(result: ScanResult) -> None:
+    print("=" * 60)
+    print(f"cursor-scan {__version__}  —  {result.target}")
+    print(
+        f"评分: {result.score}/100 等级: {result.grade}   "
+        f"文件 {result.scanned_files} 跳过 {result.skipped_files}  "
+        f"耗时 {result.duration_sec}s"
+    )
+    print("=" * 60)
+    for d in result.dimensions.values():
+        print(f"  {d.dimension:<15} {d.score:>3}/100  {d.count} 个发现")
+    total = len(result.findings)
+    if total == 0:
+        _print_suppressed(result)
+        print("\n没有发现安全问题。")
+        return
+    print(f"\n发现 {total} 个问题:")
+    for f in result.findings:
+        print(f"\n  [{f.severity.upper():<8}] {f.rule_id}  {f.dimension}")
+        print(f"      {f.file}:{f.line}")
+        print(f"      {f.message}")
+        if f.fix:
+            print(f"      修复: {f.fix}")
+    _print_suppressed(result)
+def _print_suppressed(result: ScanResult) -> None:
+    if not result.suppressed:
+        return
+    print(f"\n已忽略 {len(result.suppressed)} 个发现 (匹配忽略规则):")
+    for f in result.suppressed:
+        print(f"  [{f.severity.upper():<8}] {f.rule_id}  {f.file}:{f.line}")
+if __name__ == "__main__":
+    raise SystemExit(main())
+# ----- 文件: history.py (153 行) -----
+from __future__ import annotations
+import glob
+第 5 页 共 60 页
+cursor-scan V1.0
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
+from . import __version__
+from .models import Evidence, ScanResult
+HISTORY_DIR_NAME = "history"
+_TIMESTAMP_FMT = "%Y%m%d-%H%M%S"
+def default_history_dir() -> str:
+    return os.path.join(os.getcwd(), HISTORY_DIR_NAME)
+def evidence_to_dict(f: Evidence) -> dict:
+    return {
+        "rule_id": f.rule_id,
+        "title": f.title,
+        "severity": f.severity,
+        "file": f.file,
+        "line": f.line,
+        "message": f.message,
+        "fix": f.fix,
+        "dimension": f.dimension,
+        "code_snippet": f.code_snippet,
+    }
+def result_to_dict(result: ScanResult) -> dict:
+    return {
+        "tool": {"name": "cursor-scan", "version": __version__},
+        "target": result.target,
+        "started_at": result.started_at,
+        "duration_sec": result.duration_sec,
+        "scanned_files": result.scanned_files,
+        "skipped_files": result.skipped_files,
+        "score": result.score,
+        "grade": result.grade,
+        "summary": result.summary,
+        "dimensions": {
+            d: {"score": dim.score, "count": dim.count}
+            for d, dim in sorted(result.dimensions.items())
+        },
+        "findings": [evidence_to_dict(f) for f in result.findings],
+        "suppressed": [evidence_to_dict(f) for f in result.suppressed],
+    }
+def slug_for_target(target: str) -> str:
+    base = os.path.basename(os.path.normpath(target)) or "root"
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-").lower()
+    return slug or "project"
+def snapshot_path(target: str, history_dir: str,
+                  now: Optional[datetime] = None) -> str:
+    slug = slug_for_target(target)
+    ts = (now or datetime.now(timezone.utc)).strftime(_TIMESTAMP_FMT)
+第 6 页 共 60 页
+cursor-scan V1.0
+
+    base = os.path.join(history_dir, f"{slug}-{ts}")
+    path = base + ".json"
+    i = 2
+    while os.path.exists(path):  # two scans in the same second
+        path = f"{base}-{i}.json"
+        i += 1
+    return path
+def save_snapshot(result: ScanResult, history_dir: Optional[str] = None) -> str:
+    hd = history_dir or default_history_dir()
+    os.makedirs(hd, exist_ok=True)
+    path = snapshot_path(result.target, hd)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(result_to_dict(result), fh, ensure_ascii=False, indent=2)
+    return path
+@dataclass
+class HistoryEntry:
+    path: str
+    target: str
+    started_at: str
+    score: int
+    grade: str
+    findings: int
+    scanned_files: int
+    def describe(self) -> str:
+        return (
+            f"{os.path.basename(self.path)}  {self.target}  "
+            f"{self.score}/100 {self.grade}  {self.findings} 发现"
+        )
+def list_history(history_dir: Optional[str] = None) -> List[HistoryEntry]:
+    hd = history_dir or default_history_dir()
+    if not os.path.isdir(hd):
+        return []
+    entries = []
+    for path in glob.glob(os.path.join(hd, "*.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        entries.append(HistoryEntry(
+            path=path,
+            target=doc.get("target", "?"),
+            started_at=doc.get("started_at", "?"),
+            score=doc.get("score", 0),
+            grade=doc.get("grade", "?"),
+            findings=len(doc.get("findings", [])),
+            scanned_files=doc.get("scanned_files", 0),
+        ))
+    entries.sort(key=lambda e: (os.path.getmtime(e.path), e.started_at, e.path),
+                 reverse=True)
+第 7 页 共 60 页
+cursor-scan V1.0
+
+    return entries
+def resolve_snapshot(ref: str, history_dir: Optional[str] = None) -> str:
+    if os.path.isfile(ref):
+        return ref
+    hd = history_dir or default_history_dir()
+    if not os.path.isdir(hd):
+        raise FileNotFoundError(f"历史目录不存在: {hd}")
+    slug = slug_for_target(ref)
+    matches = [e.path for e in list_history(hd)
+               if os.path.basename(e.path).startswith((slug, ref))]
+    if not matches:
+        raise FileNotFoundError(f"未找到快照: {ref} (历史目录: {hd})")
+    return matches[0]  # list_history is newest-first
+def load_snapshot(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+@dataclass
+class ScanDiff:
+    before: dict
+    after: dict
+    added: List[dict]     # in after but not before
+    fixed: List[dict]     # in before but not after, and not suppressed
+    suppressed: List[dict]    # in before, ignored/suppressed in after
+    unsuppressed: List[dict]  # suppressed in before, active again in after
+    kept: List[dict]      # present in both
+    @property
+    def score_delta(self) -> int:
+        return int(self.after.get("score", 0)) - int(self.before.get("score", 0))
+def _finding_key(f: dict) -> Tuple[str, str, int]:
+    return (f.get("rule_id", "?"), os.path.normpath(f.get("file", "?")),
+            f.get("line", 0))
+def diff_snapshots(before: dict, after: dict) -> ScanDiff:
+    before_keyed = {_finding_key(f): f for f in before.get("findings", [])}
+    after_keyed = {_finding_key(f): f for f in after.get("findings", [])}
+    after_suppressed = {_finding_key(f): f
+                        for f in after.get("suppressed", [])}
+    before_suppressed = {_finding_key(f): f
+                         for f in before.get("suppressed", [])}
+    suppressed = [f for k, f in sorted(before_keyed.items())
+                  if k in after_suppressed and k not in after_keyed]
+    fixed = [f for k, f in sorted(before_keyed.items())
+             if k not in after_keyed and k not in after_suppressed]
+    unsuppressed = [f for k, f in sorted(before_suppressed.items())
+                    if k in after_keyed and k not in before_keyed]
+    unsup_keys = {_finding_key(f) for f in unsuppressed}
+    added = [f for k, f in sorted(after_keyed.items())
+             if k not in before_keyed and k not in unsup_keys]
+    kept = [f for k, f in sorted(after_keyed.items()) if k in before_keyed]
+    return ScanDiff(before=before, after=after, added=added, fixed=fixed,
+                    suppressed=suppressed, kept=kept,
+第 8 页 共 60 页
+cursor-scan V1.0
+
+                    unsuppressed=unsuppressed)
+# ----- 文件: ignore.py (39 行) -----
+from __future__ import annotations
+import os
+from dataclasses import dataclass
+from fnmatch import fnmatchcase
+from typing import List, Optional
+@dataclass
+class IgnorePattern:
+    rule: Optional[str] = None
+    file: Optional[str] = None
+    line: Optional[int] = None
+    @staticmethod
+    def parse(spec: str) -> "IgnorePattern":
+        parts = spec.split(":")
+        while len(parts) < 3:
+            parts.append(None)
+        rule, file_pat, line_str = parts[0], parts[1], parts[2]
+        rule = rule or None
+        file_pat = file_pat or None
+        line = int(line_str) if line_str and line_str.strip().isdigit() else None
+        return IgnorePattern(rule=rule, file=file_pat, line=line)
+    @staticmethod
+    def _match(pat: Optional[str], *values: str) -> bool:
+        return pat is None or any(fnmatchcase(v, pat) for v in values)
+    def matches(self, rule_id: str, relpath: str, line: int) -> bool:
+        base = os.path.basename(relpath)
+        if self.file is None and self.line is None:
+            return self._match(self.rule, rule_id, base, relpath)
+        if not self._match(self.rule, rule_id):
+            return False
+        if not self._match(self.file, base, relpath):
+            return False
+        if self.line is not None and line != self.line:
+            return False
+        return True
+def compile_ignores(specs: List[str]) -> List[IgnorePattern]:
+    return [IgnorePattern.parse(s) for s in specs]
+def is_suppressed(pattern: IgnorePattern, rule_id: str,
+                  relpath: str, line: int) -> bool:
+    return pattern.matches(rule_id, relpath, line)
+# ----- 文件: models.py (114 行) -----
+from __future__ import annotations
+import dataclasses
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+DIMENSIONS = [
+    "crypto",
+    "secrets",
+第 9 页 共 60 页
+cursor-scan V1.0
+
+    "deserialization",
+    "injection",
+    "permissions",
+    "access_control",
+    "dependencies",
+    "xss",
+]
+DIMENSION_LABELS = {
+    "crypto": "弱密码学",
+    "secrets": "硬编码秘密",
+    "deserialization": "不安全反序列化",
+    "injection": "注入",
+    "permissions": "文件权限",
+    "access_control": "访问控制",
+    "dependencies": "依赖风险",
+    "xss": "跨站脚本 (XSS)",
+}
+@dataclass
+class Evidence:
+    rule_id: str
+    title: str
+    severity: str
+    file: str
+    line: int
+    message: str
+    fix: str
+    dimension: str = "crypto"
+    code_snippet: str = ""
+@dataclass
+class ScanResult:
+    target: str
+    findings: List[Evidence] = field(default_factory=list)
+    scanned_files: int = 0
+    skipped_files: int = 0
+    started_at: str = ""
+    duration_sec: float = 0.0
+    score: int = 100
+    grade: str = "A"
+    dimensions: Dict[str, "DimensionScore"] = field(default_factory=dict)
+    summary: Dict[str, int] = field(default_factory=dict)
+    suppressed: List[Evidence] = field(default_factory=list)
+    def add(self, evidence: Evidence) -> None:
+        self.findings.append(evidence)
+    def scorecard(self) -> "Scorecard":
+        return Scorecard.from_result(self)
+@dataclass
+class DimensionScore:
+    dimension: str
+    score: int
+    findings: List[Evidence] = field(default_factory=list)
+第 10 页 共 60 页
+cursor-scan V1.0
+
+    @property
+    def count(self) -> int:
+        return len(self.findings)
+@dataclass
+class Scorecard:
+    overall: int
+    grade: str
+    dimensions: Dict[str, DimensionScore]
+    @staticmethod
+    def from_result(result: ScanResult) -> "Scorecard":
+        result.dimensions = Scorecard.compute(result.findings)
+        overall, grade = Scorecard.grade_overall(result.dimensions)
+        result.score = overall
+        result.grade = grade
+        return Scorecard(
+            overall=overall,
+            grade=grade,
+            dimensions=result.dimensions,
+        )
+    @staticmethod
+    def compute(findings: List[Evidence]) -> Dict[str, DimensionScore]:
+        dim_map: Dict[str, DimensionScore] = {
+            d: DimensionScore(dimension=d, score=100) for d in DIMENSIONS
+        }
+        weights = {
+            "low": 5,
+            "medium": 12,
+            "high": 20,
+            "critical": 30,
+        }
+        for f in findings:
+            ds = dim_map.get(f.dimension)
+            if ds is None:
+                ds = dim_map.setdefault(f.dimension, DimensionScore(dimension=f.dimension, score=100))
+            ds.findings.append(f)
+            ds.score = max(0, ds.score - weights.get(f.severity, 5))
+        return dim_map
+    @staticmethod
+    def grade_overall(dims: Dict[str, DimensionScore]) -> tuple[int, str]:
+        if dims:
+            overall = int(sum(d.score for d in dims.values()) / len(dims))
+        else:
+            overall = 100
+        if overall >= 90:
+            grade = "A"
+        elif overall >= 75:
+            grade = "B"
+        elif overall >= 60:
+            grade = "C"
+        elif overall >= 40:
+第 11 页 共 60 页
+cursor-scan V1.0
+
+            grade = "D"
+        else:
+            grade = "F"
+        return overall, grade
+def status_from_severity(sev: str) -> int:
+    return SEVERITY_ORDER.get(sev, 2)
+# ----- 文件: rules/access_control.py (73 行) -----
+from __future__ import annotations
+import re
+from typing import Dict, List, Tuple
+from ..models import Evidence
+AUTH_INDICATORS = {
+    "py": ["login_required", "auth_required", "require_auth", "permission_required",
+           "authorization", "auth.login", "jwt_required", "token_required", "login_required",
+           "oauth", "authenticate", "user.is_authenticated", "check_permission", "role_required"],
+    "js": ["auth", "authMiddleware", "requireAuth", "withAuth", "isAuthenticated",
+           "passport", "jwt", "csrf", "authorize", "checkAuth", "middleware"],
+}
+ROUTE_DECORATOR = re.compile(r"@(?:app\.|bp\.|router\.)?(route|get|post|put|delete|patch)")
+EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch|use)\s*\(")
+FASTAPI_ROUTE = re.compile(r"@(?:app|router)\.(get|post|put|delete|patch)")
+def _new_evidence(file: str, line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+    return Evidence(rule_id=rule_id, title=title, severity="high", file=file, line=line,
+                    message=msg, fix=fix, dimension="access_control")
+def analyze_project(files: Dict[str, List[Tuple[int, str]]],
+                    findings_out: List[Evidence]) -> None:
+    has_any_auth = False
+    for path, lines in files.items():
+        for _, text in lines:
+            low = text.lower()
+            if any(an.lower() in low for an in AUTH_INDICATORS["py"]) or \
+               any(an.lower() in low for an in AUTH_INDICATORS["js"]):
+                has_any_auth = True
+                break
+        if has_any_auth:
+            break
+    if not has_any_auth:
+        return
+    _flag_python(files, findings_out)
+    _flag_js(files, findings_out)
+_AUTH_DECORATORS = ("login_required", "jwt_required", "auth_required",
+                   "require_auth", "token_required", "permission_required",
+                   "role_required", "admin_required")
+def _flag_python(files, out) -> None:
+    for path, lines in files.items():
+        if not path.endswith(".py"):
+            continue
+        for i, (lineno, text) in enumerate(lines):
+            s = text.strip()
+            if not ROUTE_DECORATOR.search(text):
+第 12 页 共 60 页
+cursor-scan V1.0
+
+                continue
+            lo = hi = i
+            while lo - 1 >= 0 and lines[lo - 1][1].strip().startswith("@"):
+                lo -= 1
+            while hi + 1 < len(lines) and lines[hi + 1][1].strip().startswith("@"):
+                hi += 1
+            block = "".join(lines[k][1] for k in range(lo, hi + 1))
+            auth_present = any(
+                re.search(rf"@{d}\b", block, re.I) for d in _AUTH_DECORATORS
+            )
+            if auth_present:
+                continue
+            out.append(_new_evidence(
+                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
+                f"路由处理器缺少登录/鉴权装饰器 (文件内的其他请求已使用鉴权)，"
+                f"所在装饰器块：{block.strip()}",
+                "添加 @login_required / @jwt_required 装饰器"))
+def _flag_js(files, out) -> None:
+    for path, lines in files.items():
+        if not (path.endswith(".js") or path.endswith(".ts") or path.endswith(".tsx")):
+            continue
+        for lineno, text in lines:
+            if not EXPRESS_ROUTE.search(text) and not FASTAPI_ROUTE.search(text):
+                continue
+            if any(an in text for an in ["authMiddleware", "requireAuth", "passport.authenticate",
+                                          "isAuthenticated", "jwt", "verifyToken", "authorize"]):
+                continue
+            out.append(_new_evidence(
+                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
+                "Express/Fastify 路由未附加任何鉴权中间件", "在路由上加装 requireAuth 中间件"))
+# ----- 文件: rules/crypto.py (51 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_MD5_CALL = re.compile(r"\b(authlib\.jose\.|Cryptodome\.Hash\.|Crypto\.Hash\.|hashlib\.(?:new\s*\(\s*[\"'])?)md5\b", re.I)
+RE_SHA1_HASH = re.compile(r"\b(hashlib\.sha1|SHA1\b|Cryptodome\.Hash\.SHA1|Crypto\.Hash\.SHA1)")
+RE_DES = re.compile(r"\b(des|des3|tripledes)\b", re.I)
+RE_ECB = re.compile(r"\b(ecb|CipherMode\.ECB)\b", re.I)
+RE_HARDCODED_IV = re.compile(
+    r"\b(aes|cipher)(?:\.\w+|\s+\()\s*[^)\n]{0,40}(iv|nonce)\s*=\s*([\"'][^\"']+[\"']|b?[\"'][0-9a-fA-F]{8,}[\"']|[0-9]{5,})", re.I
+)
+RE_HARDCODED_SEED = re.compile(
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, message: str, fix: str, sev: str = "high") -> Evidence:
+        return Evidence(
+            rule_id=rule_id,
+第 13 页 共 60 页
+cursor-scan V1.0
+
+            title=title,
+            severity=sev,
+            file=source_path,
+            line=line,
+            message=message,
+            fix=fix,
+            dimension="crypto",
+            code_snippet="",
+        )
+    for lineno, raw in code_lines(code):
+        line = raw
+        if line.lstrip().startswith(("import ", "from ")):
+            continue
+        if RE_HARDCODED_SEED.search(line):
+            findings.append(hit(lineno, "crypto.hardcoded_seed", "硬编码随机种子",
+                                "随机数种子固定使输出可预测", "移除固定 seed 或从环境变量读取"))
+        if RE_HARDCODED_IV.search(line):
+            findings.append(hit(lineno, "crypto.fixed_iv", "固定 IV/nonce",
+                                "加密使用固定初始化向量导致相同明文产生相同密文", "每次加密使用随机 IV"))
+        if RE_MD5_CALL.search(line):
+            findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (MD5)",
+                                "MD5 已被破解，不应用于安全场景", "改用 SHA-256 / SHA-3 (hashlib.sha256)"))
+        if RE_SHA1_HASH.search(line):
+            findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (SHA1)",
+                                "SHA-1 碰撞攻击成本已被学界证实", "改用 SHA-256 / SHA-3"))
+        if RE_DES.search(line):
+            findings.append(hit(lineno, "crypto.weak_cipher_des", "弱加密算法 (DES)",
+                                "DES 密钥长度过短，易被暴力破解", "改用 AES (GCM 模式)"))
+        if RE_ECB.search(line):
+            findings.append(hit(lineno, "crypto.ecb_mode", "不安全加密模式 (ECB)",
+                                "ECB 模式相同明文块产生相同密文块，泄露结构信息", "改用 GCM / CBC + 随机 IV"))
+    return findings
+# ----- 文件: rules/deps.py (131 行) -----
+from __future__ import annotations
+import json
+import os
+import re
+from typing import Dict, List, Optional, Tuple
+from ..models import Evidence
+DIMENSION = "dependencies"
+KNOWN_VULNS: Dict[str, List[Tuple[str, str, str, str]]] = {
+    "flask": [("0.12.2", "CVE-2018-1000656", "medium", "超大 JSON 数组导致 DoS (debug 模式)")],
+    "jinja2": [("2.10.1", "CVE-2019-8341", "critical", "沙箱逃逸，可读取服务器文件 (SSTI)")],
+    "django": [("1.11.27", "CVE-2019-19844", "high", "旧版 Django (1.11 已停止维护) 存在账户枚举漏洞")],
+    "pillow": [("8.3.1", "CVE-2021-34552", "high", "convert 缓冲区溢出，可致 RCE")],
+    "requests": [("2.19.1", "CVE-2018-18074", "medium", "重定向时不剥离 Authorization 头，凭据泄露")],
+    "pyyaml": [("5.2", "CVE-2020-1747", "high", "yaml.load 加载不可信数据可致 RCE")],
+    "cryptography": [("3.3.2", "CVE-2020-25659", "high", "RSA 解密 oracle 侧信道")],
+    "urllib3": [("1.25.9", "CVE-2020-26137", "medium", "CRLF 注入 / HTTP 请求走私")],
+    "pyjwt": [("1.6.4", "CVE-2018-1000531", "high", "算法混淆攻击，可伪造令牌")],
+第 14 页 共 60 页
+cursor-scan V1.0
+
+    "log4j": [("2.16.0", "CVE-2021-44228", "critical", "Log4Shell JNDI 注入 RCE")],
+    "lodash": [("4.17.20", "CVE-2021-23337", "high", "defaultsDeep 原型污染")],
+    "minimist": [("1.2.5", "CVE-2021-44906", "medium", "原型污染链可致 RCE")],
+    "axios": [("0.21.1", "CVE-2021-3749", "high", "SSRF + 服务器端请求认证绕过")],
+    "moment": [("2.29.3", "CVE-2022-31129", "medium", "duration 解析 ReDoS")],
+    "yargs-parser": [("18.1.1", "CVE-2020-7608", "medium", "原型污染")],
+}
+def _ver_tuple(version: str) -> Optional[Tuple[int, ...]]:
+    m = re.match(r"^\s*v?(\d+(?:\.\d+)*)", str(version))
+    if not m:
+        return None
+    return tuple(int(p) for p in m.group(1).split("."))
+def _cmp(a: str, b: str) -> Optional[int]:
+    ta, tb = _ver_tuple(a), _ver_tuple(b)
+    if ta is None or tb is None:
+        return None
+    n = max(len(ta), len(tb))
+    ta += (0,) * (n - len(ta))
+    tb += (0,) * (n - len(tb))
+    return (ta > tb) - (ta < tb)
+def _known_vuln(name: str, version: str) -> Optional[Tuple[str, str, str]]:
+    for max_vul, cve, sev, note in KNOWN_VULNS.get(name.lower(), ()):
+        c = _cmp(version, max_vul)
+        if c is not None and c <= 0:
+            return cve, sev, note
+    return None
+def _evidence(path: str, line: int, rule_id: str, title: str,
+              msg: str, fix: str, sev: str) -> Evidence:
+    return Evidence(rule_id=rule_id, title=title, severity=sev, file=path,
+                    line=line, message=msg, fix=fix, dimension=DIMENSION)
+def _vuln_evidence(path: str, line: int, name: str, spec: str,
+                   cve: str, sev: str, note: str) -> Evidence:
+    return _evidence(
+        path, line, "deps.known_vulnerable", "依赖存在已知漏洞",
+        f"{name}{spec} 命中 {cve}: {note}",
+        f"升级 {name} 到修复版本（参考 {cve} 公告）", sev)
+def _unpinned_evidence(path: str, line: int, name: str, spec: str) -> Evidence:
+    return _evidence(
+        path, line, "deps.unpinned_package", "未固定版本的依赖",
+        f"{name} 使用未固定版本（{spec}），构建不可复现且可能引入含漏洞版本",
+        "锁定精确版本（requirements: ==；npm: 配合 lockfile）", "low")
+_REQ_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(==|>=|<=|~=|!=|>|<|===)?\s*([^\s;]+)?")
+_REQ_SKIP = re.compile(r"^\s*[#\-]")
+def _parse_pin(spec: str) -> Tuple[Optional[str], bool]:
+    m = _REQ_RE.match(spec)
+    if not m:
+        return None, False
+    _, op, version = m.groups()
+    return version, op in ("==", "===")
+def _check_requirements(path: str, code: str, findings: List[Evidence]) -> None:
+第 15 页 共 60 页
+cursor-scan V1.0
+
+    for lineno, raw in enumerate(code.splitlines(), start=1):
+        if not raw.strip() or _REQ_SKIP.match(raw):
+            continue
+        m = _REQ_RE.match(raw)
+        if not m:
+            continue
+        name, op, version = m.groups()
+        if not version or op not in ("==", "==="):
+            findings.append(_unpinned_evidence(path, lineno, name, raw.strip()))
+            continue
+        vuln = _known_vuln(name, version)
+        if vuln:
+            findings.append(_vuln_evidence(path, lineno, name, f"=={version}", *vuln))
+_FLOATING = ("*", "latest", "next", "x")
+def _is_floating(spec: str) -> bool:
+    s = spec.strip()
+    return s in _FLOATING or s.endswith(".x") or s.startswith((">", "<"))
+def _exact_npm_version(spec: str) -> Optional[str]:
+    s = spec.strip()
+    if s.startswith(("^", "~", ">", "<")) or s in _FLOATING or s.endswith(".x"):
+        return None
+    m = re.match(r"=?v?(\d+(?:\.\d+)*)", s)
+    if not m:
+        return None
+    return m.group(1)
+def _find_dep_line(source_lines: List[str], name: str) -> int:
+    pat = re.compile('"' + re.escape(name) + r'"\s*:')
+    for i, line in enumerate(source_lines, start=1):
+        if pat.search(line):
+            return i
+    return 1
+def _check_package_json(path: str, code: str, findings: List[Evidence]) -> None:
+    try:
+        doc = json.loads(code)
+    except ValueError:
+        return  # malformed manifest: not part of this rule's scope
+    if not isinstance(doc, dict):
+        return
+    source_lines = code.splitlines()
+    for section in ("dependencies", "devDependencies"):
+        deps = doc.get(section)
+        if not isinstance(deps, dict):
+            continue
+        for name, spec in deps.items():
+            if not isinstance(spec, str):
+                continue
+            lineno = _find_dep_line(source_lines, name)
+            version = _exact_npm_version(spec)
+            if version is None:
+                if _is_floating(spec):
+第 16 页 共 60 页
+cursor-scan V1.0
+
+                    findings.append(_unpinned_evidence(path, lineno, name, spec))
+                continue
+            vuln = _known_vuln(name, version)
+            if vuln:
+                findings.append(_vuln_evidence(path, lineno, name, f"@{spec}", *vuln))
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    base = os.path.basename(source_path).lower()
+    if base == "package.json":
+        _check_package_json(source_path, code, findings)
+    elif (base == "requirements.txt" or base == "requirement.txt"
+          or (base.startswith("requirements") and base.endswith(".txt"))):
+        _check_requirements(source_path, code, findings)
+    return findings
+# ----- 文件: rules/deserialization.py (42 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_PICKLE = re.compile(
+)
+RE_YAML_UNSAFE = re.compile(
+)
+RE_YAML_LOAD = re.compile(
+)
+RE_EVAL = re.compile(r"\beval\s*\(\s*[^)\"']")
+RE_EXEC = re.compile(r"\bexec\s*\(\s*[^)\"']")
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
+                        line=line, message=msg, fix=fix, dimension="deserialization")
+    for lineno, raw in code_lines(code):
+        if "import " in raw or "from " in raw:
+            if "pickle" not in raw and "marshal" not in raw and "yaml" not in raw:
+                continue
+            else:
+                if "marshal" in raw:
+                    continue
+        if RE_PICKLE.search(raw):
+            if "load" in raw or "loads" in raw:
+                findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
+                                    "pickle 反序列化可执行任意代码", "改用 JSON/安全格式"))
+        if RE_YAML_UNSAFE.search(raw):
+            findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
+                                "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
+        elif RE_YAML_LOAD.search(raw) and "SafeLoader" not in raw and "UnsafeLoader" not in raw:
+            findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
+                                "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
+第 17 页 共 60 页
+cursor-scan V1.0
+
+        if RE_EVAL.search(raw):
+            findings.append(hit(lineno, "deser.eval", "eval 外部输入",
+                                "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))
+        if RE_EXEC.search(raw):
+            findings.append(hit(lineno, "deser.exec", "exec 外部输入",
+                                "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
+    return findings
+# ----- 文件: rules/helpers.py (71 行) -----
+from __future__ import annotations
+import re
+from typing import Iterator, Optional, Tuple
+def _scan_line(
+    raw: str,
+    in_triple: bool,
+    triple_ch: str,
+    in_block: bool,
+) -> Tuple[str, bool, str, bool]:
+    chars: list[str] = []
+    n = len(raw)
+    i = 0
+    while i < n:
+        if in_block:
+            end = raw.find("*/", i)
+            if end == -1:
+                return "".join(chars), in_triple, triple_ch, True
+            i = end + 2
+            in_block = False
+            continue
+        if in_triple:
+            end = raw.find(triple_ch * 3, i)
+            if end == -1:
+                return "".join(chars), True, triple_ch, False
+            i = end + 3
+            in_triple = False
+            continue
+        ch = raw[i]
+        if raw.startswith("/*", i):
+            in_block = True
+            i += 2
+            continue
+        if ch in "\"'" and raw.startswith(ch * 3, i):
+            in_triple = True
+            triple_ch = ch
+            i += 3
+            continue
+        if ch in "\"'`":
+            chars.append(ch)
+            i += 1
+            while i < n:
+                if raw[i] == "\\" and i + 1 < n:
+第 18 页 共 60 页
+cursor-scan V1.0
+
+                    chars.extend((raw[i], raw[i + 1]))
+                    i += 2
+                    continue
+                if raw[i] == ch:
+                    chars.append(ch)
+                    i += 1
+                    break
+                chars.append(raw[i])
+                i += 1
+            continue
+        if ch == "#" or raw.startswith("//", i):
+            break
+        chars.append(ch)
+        i += 1
+    return "".join(chars), in_triple, triple_ch, in_block
+def code_lines(source: str) -> Iterator[Tuple[int, str]]:
+    in_triple = False
+    triple_ch = ""
+    in_block = False
+    for lineno, raw in enumerate(source.splitlines(), start=1):
+        reduced, in_triple, triple_ch, in_block = _scan_line(
+            raw, in_triple, triple_ch, in_block
+        )
+        if _is_regex_definition(reduced):
+            continue  # regex pattern definitions must not match their own text
+        yield lineno, reduced
+_REGEX_DEFINITION = re.compile(r"\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:re\.)?(?:compile|fullmatch|match|search|findall|finditer|sub|split)\s*\(")
+def _is_regex_definition(reduced: str) -> bool:
+    return bool(_REGEX_DEFINITION.match(reduced))
+# ----- 文件: rules/injection.py (46 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_SQL_CONCAT_PY = re.compile(
+    r"\b(execute|executemany|cursor\.execute|db\.query|query_all|query_one|run_query|cursor3\.execute|db.execute)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
+    re.I,
+)
+RE_SQL_FSTRING_ASSIGN = re.compile(
+    r"""^\s*[A-Za-z_]\w*\s*=\s*f["'][^"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE).*\{[^}]+}""",
+    re.I,
+)
+RE_SQL_CONCAT_JS = re.compile(
+    r"\b(db\.(query|run|all|get)|mysql\.query|pg\.query|knex\.raw|sequelize\.query)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
+    re.I,
+)
+RE_SHELL_CONCAT = re.compile(
+    r"\b(subprocess\.(call|run|Popen|check_output|check_call)\s*\(\s*[\"'][^\"']*[\"']\s*\+|os\.system\s*\(\s*\w+.*\+|exec\s*\(\s*[\"'][^\"']*\+|spawn\s*\(\s*[\"']),",
+    re.I,
+第 19 页 共 60 页
+cursor-scan V1.0
+
+)
+RE_DANGEROUS_SHELL = re.compile(
+    r"\b(shell\s*=\s*True|shell:\s*true)\b", re.I
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
+                        line=line, message=msg, fix=fix, dimension="injection")
+    for lineno, raw in code_lines(code):
+        if "import " in raw or "from " in raw:
+            continue
+        line = raw
+        if RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if RE_SQL_CONCAT_JS.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
+        if RE_SHELL_CONCAT.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
+            findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
+                                "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))
+    return findings
+# ----- 文件: rules/permissions.py (28 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_CHMOD_0777 = re.compile(
+)
+RE_MKDIR_WORLD = re.compile(
+)
+RE_TMP_WRITE = re.compile(
+    r"\bopen\s*\(\s*[\"']/tmp/[^)\"']*",
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity="high", file=source_path,
+                        line=line, message=msg, fix=fix, dimension="permissions")
+    for lineno, raw in code_lines(code):
+        if RE_CHMOD_0777.search(raw):
+            findings.append(hit(lineno, "perms.chmod_world_writable", "世界可写 chmod",
+                                "设置文件/目录为 0777 或 0666，任何用户可写", "改为 0o600/0o700"))
+        if RE_MKDIR_WORLD.search(raw):
+            findings.append(hit(lineno, "perms.world_writable_dir", "世界可写目录",
+第 20 页 共 60 页
+cursor-scan V1.0
+
+                                "以 0777 创建目录", "使用 0o700 (私有目录)"))
+        if RE_TMP_WRITE.search(raw):
+            findings.append(hit(lineno, "perms.tmp_write_insecure", "不安全 /tmp 写入",
+                                "直接写 /tmp 易受符号链接攻击 (symlink attack)", "使用 tempfile.mkstemp 私有文件"))
+    return findings
+# ----- 文件: rules/secrets.py (80 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_AWS_AKEY = re.compile(r"\b(AKIA|ASIA|ABCDEFGHIJKLMNOPQRSTUVWXYZ)[A-Z0-9]{16,20}\b")
+RE_AWS_SKEY = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")  # too noisy; keep as helper only
+RE_SLACK_TOKEN = re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")
+RE_GITHUB_TOKEN = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")
+RE_GOOGLE_API = re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b")
+RE_JWT_GENERIC = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.([A-Za-z0-9_-]{8,})?")
+RE_STRIPE = re.compile(r"\b(sk_live_[0-9A-Za-z]{20,}|rk_live_[0-9A-Za-z]{20,})\b")
+RE_PEM_PRIVATE = re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
+RE_OP_SSH = re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----")
+RE_GENERIC_KEY = re.compile(
+)
+STRONG_HINT_KEYS = re.compile(
+    r"credential|auth|pem|salt|key)(?:_|$)",
+    re.I,
+)
+LOW_ENTROPY = re.compile(
+    r"""^["'"?]+$|^[0-9]{1,6}$|^(true|false|null|none|xxx|changeme|change_me|example|test|default)$|^[x*]{4,}$""",
+    re.I,
+)
+PLACEHOLDER_VALUES = re.compile(
+    r"^(your|my|example|sample|demo|replace|test|dummy|fake|changeme|change-me|local|prod|staging|dev|default|foo|bar|\.\.\.|xxxxx+)\w*$|^\{\{\w+\}\}$|^env\(.+\)$|^process\.env\..+$|^os\.environ\.get\(.+\)$|\$",
+    re.I,
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str, sev: str = "critical") -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity=sev, file=source_path,
+                        line=line, message=msg, fix=fix, dimension="secrets")
+    if RE_PEM_PRIVATE.search(code) or RE_OP_SSH.search(code):
+        for lineno, raw in enumerate(code.splitlines(), start=1):
+            if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
+                findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
+                                    "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
+    for lineno, raw in code_lines(code):
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
+            continue
+第 21 页 共 60 页
+cursor-scan V1.0
+
+        if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
+            findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
+                                "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
+            continue
+        if RE_STRIPE.search(raw):
+            findings.append(hit(lineno, "secrets.stripe_key", "硬编码 Stripe 密钥",
+                                "检测到 live Stripe key", "使用环境变量 / 密钥管理"))
+            continue
+        if RE_GITHUB_TOKEN.search(raw):
+            findings.append(hit(lineno, "secrets.github_token", "硬编码 GitHub Token",
+                                "检测到 GitHub token", "改用环境变量，撤销泄露 token"))
+            continue
+        if RE_SLACK_TOKEN.search(raw):
+            findings.append(hit(lineno, "secrets.slack_token", "硬编码 Slack Token",
+                                "检测到 Slack bot token", "使用环境变量"))
+            continue
+        if RE_GOOGLE_API.search(raw):
+            findings.append(hit(lineno, "secrets.google_api_key", "硬编码 Google API Key",
+                                "检测到 Google API key", "使用环境变量 / Google Secret Manager"))
+            continue
+        if RE_AWS_AKEY.search(raw):
+            findings.append(hit(lineno, "secrets.aws_access_key", "硬编码 AWS 访问密钥 ID",
+                                "检测到 AWS Access Key ID", "移除，使用 IAM 角色 / AWS Secrets Manager"))
+        m = RE_GENERIC_KEY.match(raw)
+        if m:
+            key, val = m.group("key"), m.group("val")
+            if STRONG_HINT_KEYS.search(key):
+                cleaned = val.strip("'\"")
+                if LOW_ENTROPY.match(cleaned) or PLACEHOLDER_VALUES.search(cleaned):
+                    continue
+                if len(cleaned) < 10:
+                    continue
+                findings.append(hit(lineno, "secrets.hardcoded_key", "硬编码密钥/口令",
+                                    f"变量 {key} 被赋为硬编码值", "改为从环境变量 / 密钥管理读取",
+                                    sev="high"))
+    return findings
+# ----- 文件: rules/xss.py (59 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_DOM_SINK = re.compile(
+    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]",
+    re.I,
+)
+RE_DANGEROUS_REACT = re.compile(
+    r"\bdangerouslySetInnerHTML\b",
+    re.I,
+)
+第 22 页 共 60 页
+cursor-scan V1.0
+
+RE_DOCUMENT_WRITE = re.compile(
+    r"""\bdocument\.write(?:ln)?\s*\(\s*(?!["'`](?:[^"'`\\]|\\.)*["'`]\s*\))""",
+    re.I,
+)
+RE_DOC_TEMPLATE_INTERP = re.compile(
+    r"""\bdocument\.write(?:ln)?\s*\(\s*`[^`]*\$\{""",
+)
+RE_TEMPLATE_RENDER = re.compile(
+    r"\b(render_template_string|flask\.Markup|markupsafe\.Markup|\bMarkup)\s*\(",
+)
+RE_AUTOESCAPE_OFF = re.compile(
+    r"(\{%\s*autoescape\s+(false|off)\s*%\}|\|\s*safe\b)",
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str,
+            severity: str = "medium") -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity=severity,
+                        file=source_path, line=line, message=msg, fix=fix,
+                        dimension="xss")
+    for lineno, raw in code_lines(code):
+        if "import " in raw or "from " in raw:
+            continue
+        line = raw
+        if RE_DOM_SINK.search(line):
+            findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
+                                "用户输入可触发 XSS",
+                                "改用 textContent / innerText，或先做 HTML 转义"))
+        if RE_DANGEROUS_REACT.search(line):
+            findings.append(hit(lineno, "xss.dangerous_react", "React 危险 HTML",
+                                "dangerouslySetInnerHTML 直接渲染原始 HTML",
+                                "使用 React 子节点或先转义 __html 内容"))
+        if RE_DOCUMENT_WRITE.search(line) or RE_DOC_TEMPLATE_INTERP.search(line):
+            findings.append(hit(lineno, "xss.document_write", "document.write",
+                                "document.write 写入非字面量内容",
+                                "改用 DOM API (textContent / createElement)"))
+        if RE_TEMPLATE_RENDER.search(line):
+            findings.append(hit(lineno, "xss.template_render", "模板渲染未转义",
+                                "render_template_string / Markup 未转义地渲染用户输入",
+                                "启用自动转义并使用 render_template，避免 Markup 包裹用户输入",
+                                severity="high"))
+        if RE_AUTOESCAPE_OFF.search(line):
+            findings.append(hit(lineno, "xss.template_render", "关闭模板转义",
+                                "Jinja 自动转义被关闭或将变量标记为 safe",
+                                "保持 autoescape 开启，移除 |safe 过滤器"))
+    return findings
+# ----- 文件: scan.py (207 行) -----
+from __future__ import annotations
+import json
+import os
+第 23 页 共 60 页
+cursor-scan V1.0
+
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Dict, Iterable, List, Optional, Tuple
+from .ignore import IgnorePattern, compile_ignores
+from .models import Evidence, ScanResult, Scorecard
+from .rules import (access_control, crypto, deps, deserialization, injection,
+                    permissions, secrets, xss)
+from .scanners import ast as ast_scanners
+SKIP_DIRS = {
+    ".git", ".hg", ".svn", ".bzr",
+    "node_modules", "bower_components",
+    ".venv", "venv", "env", "virtualenv",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".next", ".nuxt", "dist", "build", ".cache", ".tox", ".eggs",
+    ".future-code", ".idea", ".vscode",
+}
+SKIP_EXTS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".svg",
+    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".zip", ".tar", ".gz",
+    ".xz", ".bz2", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib", ".o", ".a",
+    ".pyc", ".pyo", ".class", ".jar", ".lock", ".min.js", ".map",
+}
+_BINARY_RE = re.compile(rb"[\x00\x01\x02]")
+TEXT_EXTS = {
+    ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+    ".rb", ".php", ".go", ".rs", ".java", ".kt", ".sh", ".bash", ".zsh", ".pl",
+    ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".sql", ".vue",
+    ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
+    ".tf", ".cfg", ".conf",
+}
+ALWAYS_TEXT = {
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml", "Makefile",
+    "requirements.txt", "package.json", "package-lock.json", "Pipfile",
+    "Pipfile.lock", ".env", ".npmrc", ".pypirc", "Gemfile", "Gemfile.lock",
+    "composer.json", "go.mod", "go.sum", "Cargo.toml", "setup.py", "pyproject.toml",
+    "Procfile", ".gitlab-ci.yml", ".github", ".dockerignore", "README.md",
+}
+CONFIG_NAME = ".cursor-scan.json"
+@dataclass
+class ScanOptions:
+    max_bytes: int = 2 * 1024 * 1024  # skip files larger than 2 MB
+    follow_symlinks: bool = False
+    ignore_patterns: List[IgnorePattern] = field(default_factory=list)
+def _is_binary(data: bytes) -> bool:
+    head = data[:8192]
+    return bool(_BINARY_RE.search(head)) or b"\x00" in head
+def _read_text(path: str, max_bytes: int) -> Tuple[str, Optional[str]]:
+    try:
+第 24 页 共 60 页
+cursor-scan V1.0
+
+        stat = os.stat(path)
+    except OSError:
+        return "", "unreadable"
+    if stat.st_size > max_bytes:
+        return "", "too_large"
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "", "unreadable"
+    if _is_binary(data):
+        return "", "binary"
+    try:
+        return data.decode("utf-8", errors="strict"), None
+    except UnicodeDecodeError:
+        return data.decode("latin-1", errors="replace"), "encoding"
+def _iter_source_files(root: str, opts: ScanOptions) -> Iterable[str]:
+    root = os.path.abspath(root)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=opts.follow_symlinks):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in SKIP_DIRS and not d.startswith(".")
+        )
+        for name in sorted(filenames):
+            if name == CONFIG_NAME:
+                continue  # the tool's own config is never scanned
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            low = name.lower()
+            ext = os.path.splitext(low)[1]
+            if ext in SKIP_EXTS:
+                continue
+            if low in ALWAYS_TEXT or ext in TEXT_EXTS:
+                yield rel
+def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
+    if not src:
+        return
+    lang = ast_scanners.lang_for_file(rel)
+    if lang == "python":
+        try:
+            ast_scanners.analyze_python(path_of(root, rel), src, findings)
+        except Exception as exc:  # never let one file crash a scan
+            findings.append(_internal_error(path_of(root, rel), exc))
+    elif lang in ("javascript", "typescript"):
+        try:
+            ast_scanners.analyze_jsts(path_of(root, rel), src, findings)
+        except Exception as exc:
+            findings.append(_internal_error(path_of(root, rel), exc))
+    for runner in (crypto, injection, deserialization, permissions):
+        findings.extend(runner.analyze_code(path_of(root, rel), src))
+    findings.extend(secrets.analyze_code(path_of(root, rel), src))
+第 25 页 共 60 页
+cursor-scan V1.0
+
+    findings.extend(deps.analyze_code(path_of(root, rel), src))
+    findings.extend(xss.analyze_code(path_of(root, rel), src))
+def path_of(root: str, rel: str) -> str:
+    return os.path.join(root, rel)
+def _internal_error(path: str, exc: Exception) -> Evidence:
+    return Evidence(
+        rule_id="internal.scan_error",
+        title="扫描器异常",
+        severity="low",
+        file=path,
+        line=0,
+        message=f"AST 扫描失败: {exc}",
+        fix="检查文件语法",
+        dimension="injection",
+    )
+def _load_config(target: str) -> List[IgnorePattern]:
+    cfg = os.path.join(target, CONFIG_NAME)
+    if not os.path.isfile(cfg):
+        return []
+    try:
+        with open(cfg, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    specs = doc.get("ignore", []) if isinstance(doc, dict) else []
+    if not isinstance(specs, list):
+        return []
+    return compile_ignores([s for s in specs if isinstance(s, str)])
+def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResult:
+    options = options or ScanOptions()
+    target = os.path.abspath(target)
+    started = time.monotonic()
+    result = ScanResult(
+        target=target,
+        started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    if not os.path.isdir(target):
+        raise NotADirectoryError(f"扫描目标不存在或不是目录: {target}")
+    patterns = list(options.ignore_patterns) + _load_config(target)
+    rels = sorted(_iter_source_files(target, options))
+    file_texts: Dict[str, List[Tuple[int, str]]] = {}
+    for rel in rels:
+        path = os.path.join(target, rel)
+        src, _ = _read_text(path, options.max_bytes)
+        if not src:
+            result.skipped_files += 1
+            continue
+        result.scanned_files += 1
+        _scan_file(target, rel, src, result.findings)
+        file_texts[rel] = list(enumerate(src.splitlines(), start=1))
+第 26 页 共 60 页
+cursor-scan V1.0
+
+    access_control.analyze_project(file_texts, result.findings)
+    result.duration_sec = round(time.monotonic() - started, 3)
+    _finalize(result, patterns, target)
+    _backfill_snippets(result, file_texts, target)
+    return result
+def _backfill_snippets(result: ScanResult,
+                       file_texts: Dict[str, List[Tuple[int, str]]],
+                       target: str) -> None:
+    by_path: Dict[str, List[Tuple[int, str]]] = dict(file_texts)
+    for rel, lines in file_texts.items():
+        by_path[os.path.join(target, rel)] = lines
+    for f in list(result.findings) + list(result.suppressed):
+        if f.code_snippet or f.line <= 0:
+            continue
+        lines = by_path.get(f.file)
+        if lines is None:
+            try:
+                lines = by_path.get(os.path.relpath(f.file, target))
+            except ValueError:
+                lines = None
+        if lines and 0 < f.line <= len(lines):
+            f.code_snippet = lines[f.line - 1][1].strip()
+def _finalize(result: ScanResult, patterns: List[IgnorePattern] = (),
+              target: str = "") -> None:
+    seen: set = set()
+    unique: List[Evidence] = []
+    for f in result.findings:
+        key = (f.rule_id, f.file, f.line)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(f)
+    unique.sort(key=lambda f: (f.file, f.line, f.rule_id))
+    result.findings = unique
+    suppressed: List[Evidence] = []
+    if patterns:
+        target_abs = os.path.abspath(target)
+        kept: List[Evidence] = []
+        for f in result.findings:
+            try:
+                rel = os.path.relpath(f.file, target_abs)
+            except ValueError:  # f.file on a different drive (Windows)
+                rel = f.file
+            if any(p.matches(f.rule_id, rel, f.line) for p in patterns):
+                suppressed.append(f)
+            else:
+                kept.append(f)
+        result.findings = kept
+        result.suppressed = suppressed
+    counts: Dict[str, int] = {}
+第 27 页 共 60 页
+cursor-scan V1.0
+
+    for f in result.findings:
+        counts[f.severity] = counts.get(f.severity, 0) + 1
+    result.summary = counts
+    Scorecard.from_result(result)
+# ----- 文件: scanners/ast.py (287 行) -----
+from __future__ import annotations
+import tree_sitter_javascript
+import tree_sitter_python
+import tree_sitter_typescript
+from tree_sitter import Language, Parser
+from ..models import Evidence
+_LANG_CACHE: dict = {}
+def _language(name: str):
+    if name not in _LANG_CACHE:
+        if name == "python":
+            lang = Language(tree_sitter_python.language())
+        elif name == "javascript":
+            lang = Language(tree_sitter_javascript.language())
+        else:  # typescript
+            lang = Language(tree_sitter_typescript.language_typescript())
+        _LANG_CACHE[name] = lang
+    return _LANG_CACHE[name]
+_PARSER_CACHE: dict = {}
+_ext_to_lang = {
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+}
+def lang_for_file(path: str):
+    import os
+    low = path.lower()
+    for ext, lang in _ext_to_lang.items():
+        if low.endswith(ext):
+            return lang
+    return None
+def _parser(lang: str) -> Parser:
+    if lang not in _PARSER_CACHE:
+        _PARSER_CACHE[lang] = Parser(_language(lang))
+    return _PARSER_CACHE[lang]
+def parse(source: str, lang: str):
+    return _parser(lang).parse(source.encode("utf-8", errors="surrogatepass"))
+def collect_calls(root, src: str):
+    stack = [root]
+第 28 页 共 60 页
+cursor-scan V1.0
+
+    while stack:
+        node = stack.pop()
+        if node.type in ("call", "call_expression"):
+            yield node
+        stack.extend(node.children)
+def call_fn_name(node, src: str) -> str:
+    fn = node.child_by_field_name("function")
+    if fn is None:
+        return ""
+    return src[fn.start_byte:fn.end_byte]
+def args_text(node, src: str) -> str:
+    args = node.child_by_field_name("arguments")
+    if args is None:
+        return ""
+    return src[args.start_byte:args.end_byte]
+def _line_for(node) -> int:
+    return node.start_point[0] + 1
+def _ev(rule_id, title, sev, path, line, msg, fix, dimension):
+    return Evidence(rule_id=rule_id, title=title, severity=sev, file=path, line=line,
+                    message=msg, fix=fix, dimension=dimension)
+def analyze_python(path, src, findings):
+    tree = parse(src, "python")
+    root = tree.root_node
+    for call in collect_calls(root, src):
+        fn = call_fn_name(call, src)
+        args = args_text(call, src)
+        line = _line_for(call)
+        if fn in ("hashlib.md5", "hashlib.sha1", "md5", "sha1",
+                  "hashlib.new", "cryptography.hazmat.primitives.hashes.MD5",
+                  "cryptography.hazmat.primitives.hashes.SHA1"):
+            if fn.startswith("hashlib.new"):
+                if any(q in args for q in ('"md5"', "'md5'", '"sha1"', "'sha1'")):
+                    findings.append(_ev(
+                        "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                        f"hashlib.new 调用弱哈希 {args}", "改用 sha256", "crypto"))
+            elif fn == "md5" or fn == "sha1":
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "medium", path, line,
+                    f"调用 md5/sha1: {fn}()", "改用 sha256", "crypto"))
+            else:
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                    f"调用弱哈希 {fn}", "改用 sha256 (hashlib.sha256)", "crypto"))
+        if fn in ("AES.new", "AES", "DES.new", "DES3.new", "DES", "TripleDES.new",
+                  "Crypto.Cipher.DES.new", "Crypto.Cipher.DES3.new",
+                  "cryptography.hazmat.primitives.ciphers.algorithms"):
+            if "MODE.ECB" in args or "ECB" in args:
+                findings.append(_ev(
+                    "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
+                    f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
+第 29 页 共 60 页
+cursor-scan V1.0
+
+            if fn.startswith("DES") or "DES3" in fn:
+                findings.append(_ev(
+                    "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
+                    f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
+            m = _find_kw_literal(call, src, ("iv", "nonce"))
+            if m:
+                findings.append(_ev(
+                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
+                    f"加密调用 {fn} 使用固定 IV {m[2]}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
+        if fn.endswith(".new") and ("MODE.ECB" in args or "CipherMode.ECB" in args):
+            findings.append(_ev(
+                "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
+                f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
+        if fn in ("random.seed", "np.random.seed", "numpy.random.seed",
+                  "torch.manual_seed", "torch.random.manual_seed", "random.seedfn"):
+            seed_val = _arg_literal(call, src)
+            if seed_val is not None and _is_literal_scalar(seed_val):
+                findings.append(_ev(
+                    "crypto.hardcoded_seed", "硬编码随机种子", "medium", path, line,
+                    f"随机种子被硬编码为 {seed_val}", "改为随机种子 (os.urandom) 或可配置", "crypto"))
+        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads"):
+            findings.append(_ev(
+                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                f"pickle 反序列化 {args}", "改用 JSON / 安全序列化格式", "deserialization"))
+        if fn in ("yaml.load", "yaml.full_load_all", "yaml.load_all"):
+            if not _yaml_safe(fn, call, src, args):
+                findings.append(_ev(
+                    "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
+                    f"yaml.load 未使用安全 Loader", "改用 yaml.safe_load(data)", "deserialization"))
+        if fn == "yaml.unsafe_load" or fn == "yaml.unsafe_load_all":
+            findings.append(_ev(
+                "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
+                "显式调用 yaml.unsafe_load", "改用 yaml.safe_load", "deserialization"))
+        if fn == "eval" or fn.endswith("(eval") or fn in ("exec", "compile"):
+            if _has_external_input(call, src, args):
+                findings.append(_ev(
+                    "deser.eval", "eval/exec 外部输入", "critical", path, line,
+                    f"{fn} 接收外部输入: {args}", "重构，不使用 eval/exec 解析数据", "deserialization"))
+        if fn.endswith(".execute") or fn in ("cursor.execute", "db.execute", "conn.execute",
+                                              "execute", "executemany", "cursor3.execute",
+                                              "mysql.cursor.execute"):
+            if _contains_sql(args) and _has_concat(args):
+                findings.append(_ev(
+                    "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
+                    f"SQL 通过字符串拼接: {args}", "使用参数化查询 (?, %s)", "injection"))
+        if fn in ("os.system",) or fn.startswith("subprocess."):
+            if "shell=True" in args or "shell = True" in args:
+                if _has_concat(args):
+                    findings.append(_ev(
+                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+第 30 页 共 60 页
+
+……（后续为其余模块代表代码接续，同样每页 50 行）……
+
+cursor-scan V1.0
+
+    def _match(pat: Optional[str], *values: str) -> bool:
+        return pat is None or any(fnmatchcase(v, pat) for v in values)
+    def matches(self, rule_id: str, relpath: str, line: int) -> bool:
+        base = os.path.basename(relpath)
+        if self.file is None and self.line is None:
+            return self._match(self.rule, rule_id, base, relpath)
+        if not self._match(self.rule, rule_id):
+            return False
+        if not self._match(self.file, base, relpath):
+            return False
+        if self.line is not None and line != self.line:
+            return False
+        return True
+def compile_ignores(specs: List[str]) -> List[IgnorePattern]:
+    return [IgnorePattern.parse(s) for s in specs]
+def is_suppressed(pattern: IgnorePattern, rule_id: str,
+                  relpath: str, line: int) -> bool:
+    return pattern.matches(rule_id, relpath, line)
+# ----- 文件: models.py (114 行) -----
+from __future__ import annotations
+import dataclasses
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+DIMENSIONS = [
+    "crypto",
+    "secrets",
+    "deserialization",
+    "injection",
+    "permissions",
+    "access_control",
+    "dependencies",
+    "xss",
+]
+DIMENSION_LABELS = {
+    "crypto": "弱密码学",
+    "secrets": "硬编码秘密",
+    "deserialization": "不安全反序列化",
+    "injection": "注入",
+    "permissions": "文件权限",
+    "access_control": "访问控制",
+    "dependencies": "依赖风险",
+    "xss": "跨站脚本 (XSS)",
+}
+@dataclass
+class Evidence:
+    rule_id: str
+    title: str
+    severity: str
+    file: str
+第 31 页 共 60 页
+cursor-scan V1.0
+
+    line: int
+    message: str
+    fix: str
+    dimension: str = "crypto"
+    code_snippet: str = ""
+@dataclass
+class ScanResult:
+    target: str
+    findings: List[Evidence] = field(default_factory=list)
+    scanned_files: int = 0
+    skipped_files: int = 0
+    started_at: str = ""
+    duration_sec: float = 0.0
+    score: int = 100
+    grade: str = "A"
+    dimensions: Dict[str, "DimensionScore"] = field(default_factory=dict)
+    summary: Dict[str, int] = field(default_factory=dict)
+    suppressed: List[Evidence] = field(default_factory=list)
+    def add(self, evidence: Evidence) -> None:
+        self.findings.append(evidence)
+    def scorecard(self) -> "Scorecard":
+        return Scorecard.from_result(self)
+@dataclass
+class DimensionScore:
+    dimension: str
+    score: int
+    findings: List[Evidence] = field(default_factory=list)
+    @property
+    def count(self) -> int:
+        return len(self.findings)
+@dataclass
+class Scorecard:
+    overall: int
+    grade: str
+    dimensions: Dict[str, DimensionScore]
+    @staticmethod
+    def from_result(result: ScanResult) -> "Scorecard":
+        result.dimensions = Scorecard.compute(result.findings)
+        overall, grade = Scorecard.grade_overall(result.dimensions)
+        result.score = overall
+        result.grade = grade
+        return Scorecard(
+            overall=overall,
+            grade=grade,
+            dimensions=result.dimensions,
+        )
+    @staticmethod
+    def compute(findings: List[Evidence]) -> Dict[str, DimensionScore]:
+        dim_map: Dict[str, DimensionScore] = {
+            d: DimensionScore(dimension=d, score=100) for d in DIMENSIONS
+第 32 页 共 60 页
+cursor-scan V1.0
+
+        }
+        weights = {
+            "low": 5,
+            "medium": 12,
+            "high": 20,
+            "critical": 30,
+        }
+        for f in findings:
+            ds = dim_map.get(f.dimension)
+            if ds is None:
+                ds = dim_map.setdefault(f.dimension, DimensionScore(dimension=f.dimension, score=100))
+            ds.findings.append(f)
+            ds.score = max(0, ds.score - weights.get(f.severity, 5))
+        return dim_map
+    @staticmethod
+    def grade_overall(dims: Dict[str, DimensionScore]) -> tuple[int, str]:
+        if dims:
+            overall = int(sum(d.score for d in dims.values()) / len(dims))
+        else:
+            overall = 100
+        if overall >= 90:
+            grade = "A"
+        elif overall >= 75:
+            grade = "B"
+        elif overall >= 60:
+            grade = "C"
+        elif overall >= 40:
+            grade = "D"
+        else:
+            grade = "F"
+        return overall, grade
+def status_from_severity(sev: str) -> int:
+    return SEVERITY_ORDER.get(sev, 2)
+# ----- 文件: rules/access_control.py (73 行) -----
+from __future__ import annotations
+import re
+from typing import Dict, List, Tuple
+from ..models import Evidence
+AUTH_INDICATORS = {
+    "py": ["login_required", "auth_required", "require_auth", "permission_required",
+           "authorization", "auth.login", "jwt_required", "token_required", "login_required",
+           "oauth", "authenticate", "user.is_authenticated", "check_permission", "role_required"],
+    "js": ["auth", "authMiddleware", "requireAuth", "withAuth", "isAuthenticated",
+           "passport", "jwt", "csrf", "authorize", "checkAuth", "middleware"],
+}
+ROUTE_DECORATOR = re.compile(r"@(?:app\.|bp\.|router\.)?(route|get|post|put|delete|patch)")
+EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch|use)\s*\(")
+FASTAPI_ROUTE = re.compile(r"@(?:app|router)\.(get|post|put|delete|patch)")
+def _new_evidence(file: str, line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+    return Evidence(rule_id=rule_id, title=title, severity="high", file=file, line=line,
+第 33 页 共 60 页
+cursor-scan V1.0
+
+                    message=msg, fix=fix, dimension="access_control")
+def analyze_project(files: Dict[str, List[Tuple[int, str]]],
+                    findings_out: List[Evidence]) -> None:
+    has_any_auth = False
+    for path, lines in files.items():
+        for _, text in lines:
+            low = text.lower()
+            if any(an.lower() in low for an in AUTH_INDICATORS["py"]) or \
+               any(an.lower() in low for an in AUTH_INDICATORS["js"]):
+                has_any_auth = True
+                break
+        if has_any_auth:
+            break
+    if not has_any_auth:
+        return
+    _flag_python(files, findings_out)
+    _flag_js(files, findings_out)
+_AUTH_DECORATORS = ("login_required", "jwt_required", "auth_required",
+                   "require_auth", "token_required", "permission_required",
+                   "role_required", "admin_required")
+def _flag_python(files, out) -> None:
+    for path, lines in files.items():
+        if not path.endswith(".py"):
+            continue
+        for i, (lineno, text) in enumerate(lines):
+            s = text.strip()
+            if not ROUTE_DECORATOR.search(text):
+                continue
+            lo = hi = i
+            while lo - 1 >= 0 and lines[lo - 1][1].strip().startswith("@"):
+                lo -= 1
+            while hi + 1 < len(lines) and lines[hi + 1][1].strip().startswith("@"):
+                hi += 1
+            block = "".join(lines[k][1] for k in range(lo, hi + 1))
+            auth_present = any(
+                re.search(rf"@{d}\b", block, re.I) for d in _AUTH_DECORATORS
+            )
+            if auth_present:
+                continue
+            out.append(_new_evidence(
+                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
+                f"路由处理器缺少登录/鉴权装饰器 (文件内的其他请求已使用鉴权)，"
+                f"所在装饰器块：{block.strip()}",
+                "添加 @login_required / @jwt_required 装饰器"))
+def _flag_js(files, out) -> None:
+    for path, lines in files.items():
+        if not (path.endswith(".js") or path.endswith(".ts") or path.endswith(".tsx")):
+            continue
+        for lineno, text in lines:
+            if not EXPRESS_ROUTE.search(text) and not FASTAPI_ROUTE.search(text):
+第 34 页 共 60 页
+cursor-scan V1.0
+
+                continue
+            if any(an in text for an in ["authMiddleware", "requireAuth", "passport.authenticate",
+                                          "isAuthenticated", "jwt", "verifyToken", "authorize"]):
+                continue
+            out.append(_new_evidence(
+                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
+                "Express/Fastify 路由未附加任何鉴权中间件", "在路由上加装 requireAuth 中间件"))
+# ----- 文件: rules/crypto.py (51 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_MD5_CALL = re.compile(r"\b(authlib\.jose\.|Cryptodome\.Hash\.|Crypto\.Hash\.|hashlib\.(?:new\s*\(\s*[\"'])?)md5\b", re.I)
+RE_SHA1_HASH = re.compile(r"\b(hashlib\.sha1|SHA1\b|Cryptodome\.Hash\.SHA1|Crypto\.Hash\.SHA1)")
+RE_DES = re.compile(r"\b(des|des3|tripledes)\b", re.I)
+RE_ECB = re.compile(r"\b(ecb|CipherMode\.ECB)\b", re.I)
+RE_HARDCODED_IV = re.compile(
+    r"\b(aes|cipher)(?:\.\w+|\s+\()\s*[^)\n]{0,40}(iv|nonce)\s*=\s*([\"'][^\"']+[\"']|b?[\"'][0-9a-fA-F]{8,}[\"']|[0-9]{5,})", re.I
+)
+RE_HARDCODED_SEED = re.compile(
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, message: str, fix: str, sev: str = "high") -> Evidence:
+        return Evidence(
+            rule_id=rule_id,
+            title=title,
+            severity=sev,
+            file=source_path,
+            line=line,
+            message=message,
+            fix=fix,
+            dimension="crypto",
+            code_snippet="",
+        )
+    for lineno, raw in code_lines(code):
+        line = raw
+        if line.lstrip().startswith(("import ", "from ")):
+            continue
+        if RE_HARDCODED_SEED.search(line):
+            findings.append(hit(lineno, "crypto.hardcoded_seed", "硬编码随机种子",
+                                "随机数种子固定使输出可预测", "移除固定 seed 或从环境变量读取"))
+        if RE_HARDCODED_IV.search(line):
+            findings.append(hit(lineno, "crypto.fixed_iv", "固定 IV/nonce",
+                                "加密使用固定初始化向量导致相同明文产生相同密文", "每次加密使用随机 IV"))
+        if RE_MD5_CALL.search(line):
+            findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (MD5)",
+                                "MD5 已被破解，不应用于安全场景", "改用 SHA-256 / SHA-3 (hashlib.sha256)"))
+        if RE_SHA1_HASH.search(line):
+第 35 页 共 60 页
+cursor-scan V1.0
+
+            findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (SHA1)",
+                                "SHA-1 碰撞攻击成本已被学界证实", "改用 SHA-256 / SHA-3"))
+        if RE_DES.search(line):
+            findings.append(hit(lineno, "crypto.weak_cipher_des", "弱加密算法 (DES)",
+                                "DES 密钥长度过短，易被暴力破解", "改用 AES (GCM 模式)"))
+        if RE_ECB.search(line):
+            findings.append(hit(lineno, "crypto.ecb_mode", "不安全加密模式 (ECB)",
+                                "ECB 模式相同明文块产生相同密文块，泄露结构信息", "改用 GCM / CBC + 随机 IV"))
+    return findings
+# ----- 文件: rules/deps.py (131 行) -----
+from __future__ import annotations
+import json
+import os
+import re
+from typing import Dict, List, Optional, Tuple
+from ..models import Evidence
+DIMENSION = "dependencies"
+KNOWN_VULNS: Dict[str, List[Tuple[str, str, str, str]]] = {
+    "flask": [("0.12.2", "CVE-2018-1000656", "medium", "超大 JSON 数组导致 DoS (debug 模式)")],
+    "jinja2": [("2.10.1", "CVE-2019-8341", "critical", "沙箱逃逸，可读取服务器文件 (SSTI)")],
+    "django": [("1.11.27", "CVE-2019-19844", "high", "旧版 Django (1.11 已停止维护) 存在账户枚举漏洞")],
+    "pillow": [("8.3.1", "CVE-2021-34552", "high", "convert 缓冲区溢出，可致 RCE")],
+    "requests": [("2.19.1", "CVE-2018-18074", "medium", "重定向时不剥离 Authorization 头，凭据泄露")],
+    "pyyaml": [("5.2", "CVE-2020-1747", "high", "yaml.load 加载不可信数据可致 RCE")],
+    "cryptography": [("3.3.2", "CVE-2020-25659", "high", "RSA 解密 oracle 侧信道")],
+    "urllib3": [("1.25.9", "CVE-2020-26137", "medium", "CRLF 注入 / HTTP 请求走私")],
+    "pyjwt": [("1.6.4", "CVE-2018-1000531", "high", "算法混淆攻击，可伪造令牌")],
+    "log4j": [("2.16.0", "CVE-2021-44228", "critical", "Log4Shell JNDI 注入 RCE")],
+    "lodash": [("4.17.20", "CVE-2021-23337", "high", "defaultsDeep 原型污染")],
+    "minimist": [("1.2.5", "CVE-2021-44906", "medium", "原型污染链可致 RCE")],
+    "axios": [("0.21.1", "CVE-2021-3749", "high", "SSRF + 服务器端请求认证绕过")],
+    "moment": [("2.29.3", "CVE-2022-31129", "medium", "duration 解析 ReDoS")],
+    "yargs-parser": [("18.1.1", "CVE-2020-7608", "medium", "原型污染")],
+}
+def _ver_tuple(version: str) -> Optional[Tuple[int, ...]]:
+    m = re.match(r"^\s*v?(\d+(?:\.\d+)*)", str(version))
+    if not m:
+        return None
+    return tuple(int(p) for p in m.group(1).split("."))
+def _cmp(a: str, b: str) -> Optional[int]:
+    ta, tb = _ver_tuple(a), _ver_tuple(b)
+    if ta is None or tb is None:
+        return None
+    n = max(len(ta), len(tb))
+    ta += (0,) * (n - len(ta))
+    tb += (0,) * (n - len(tb))
+    return (ta > tb) - (ta < tb)
+def _known_vuln(name: str, version: str) -> Optional[Tuple[str, str, str]]:
+    for max_vul, cve, sev, note in KNOWN_VULNS.get(name.lower(), ()):
+        c = _cmp(version, max_vul)
+第 36 页 共 60 页
+cursor-scan V1.0
+
+        if c is not None and c <= 0:
+            return cve, sev, note
+    return None
+def _evidence(path: str, line: int, rule_id: str, title: str,
+              msg: str, fix: str, sev: str) -> Evidence:
+    return Evidence(rule_id=rule_id, title=title, severity=sev, file=path,
+                    line=line, message=msg, fix=fix, dimension=DIMENSION)
+def _vuln_evidence(path: str, line: int, name: str, spec: str,
+                   cve: str, sev: str, note: str) -> Evidence:
+    return _evidence(
+        path, line, "deps.known_vulnerable", "依赖存在已知漏洞",
+        f"{name}{spec} 命中 {cve}: {note}",
+        f"升级 {name} 到修复版本（参考 {cve} 公告）", sev)
+def _unpinned_evidence(path: str, line: int, name: str, spec: str) -> Evidence:
+    return _evidence(
+        path, line, "deps.unpinned_package", "未固定版本的依赖",
+        f"{name} 使用未固定版本（{spec}），构建不可复现且可能引入含漏洞版本",
+        "锁定精确版本（requirements: ==；npm: 配合 lockfile）", "low")
+_REQ_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(==|>=|<=|~=|!=|>|<|===)?\s*([^\s;]+)?")
+_REQ_SKIP = re.compile(r"^\s*[#\-]")
+def _parse_pin(spec: str) -> Tuple[Optional[str], bool]:
+    m = _REQ_RE.match(spec)
+    if not m:
+        return None, False
+    _, op, version = m.groups()
+    return version, op in ("==", "===")
+def _check_requirements(path: str, code: str, findings: List[Evidence]) -> None:
+    for lineno, raw in enumerate(code.splitlines(), start=1):
+        if not raw.strip() or _REQ_SKIP.match(raw):
+            continue
+        m = _REQ_RE.match(raw)
+        if not m:
+            continue
+        name, op, version = m.groups()
+        if not version or op not in ("==", "==="):
+            findings.append(_unpinned_evidence(path, lineno, name, raw.strip()))
+            continue
+        vuln = _known_vuln(name, version)
+        if vuln:
+            findings.append(_vuln_evidence(path, lineno, name, f"=={version}", *vuln))
+_FLOATING = ("*", "latest", "next", "x")
+def _is_floating(spec: str) -> bool:
+    s = spec.strip()
+    return s in _FLOATING or s.endswith(".x") or s.startswith((">", "<"))
+def _exact_npm_version(spec: str) -> Optional[str]:
+    s = spec.strip()
+    if s.startswith(("^", "~", ">", "<")) or s in _FLOATING or s.endswith(".x"):
+        return None
+    m = re.match(r"=?v?(\d+(?:\.\d+)*)", s)
+    if not m:
+第 37 页 共 60 页
+cursor-scan V1.0
+
+        return None
+    return m.group(1)
+def _find_dep_line(source_lines: List[str], name: str) -> int:
+    pat = re.compile('"' + re.escape(name) + r'"\s*:')
+    for i, line in enumerate(source_lines, start=1):
+        if pat.search(line):
+            return i
+    return 1
+def _check_package_json(path: str, code: str, findings: List[Evidence]) -> None:
+    try:
+        doc = json.loads(code)
+    except ValueError:
+        return  # malformed manifest: not part of this rule's scope
+    if not isinstance(doc, dict):
+        return
+    source_lines = code.splitlines()
+    for section in ("dependencies", "devDependencies"):
+        deps = doc.get(section)
+        if not isinstance(deps, dict):
+            continue
+        for name, spec in deps.items():
+            if not isinstance(spec, str):
+                continue
+            lineno = _find_dep_line(source_lines, name)
+            version = _exact_npm_version(spec)
+            if version is None:
+                if _is_floating(spec):
+                    findings.append(_unpinned_evidence(path, lineno, name, spec))
+                continue
+            vuln = _known_vuln(name, version)
+            if vuln:
+                findings.append(_vuln_evidence(path, lineno, name, f"@{spec}", *vuln))
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    base = os.path.basename(source_path).lower()
+    if base == "package.json":
+        _check_package_json(source_path, code, findings)
+    elif (base == "requirements.txt" or base == "requirement.txt"
+          or (base.startswith("requirements") and base.endswith(".txt"))):
+        _check_requirements(source_path, code, findings)
+    return findings
+# ----- 文件: rules/deserialization.py (42 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_PICKLE = re.compile(
+)
+RE_YAML_UNSAFE = re.compile(
+第 38 页 共 60 页
+cursor-scan V1.0
+
+)
+RE_YAML_LOAD = re.compile(
+)
+RE_EVAL = re.compile(r"\beval\s*\(\s*[^)\"']")
+RE_EXEC = re.compile(r"\bexec\s*\(\s*[^)\"']")
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
+                        line=line, message=msg, fix=fix, dimension="deserialization")
+    for lineno, raw in code_lines(code):
+        if "import " in raw or "from " in raw:
+            if "pickle" not in raw and "marshal" not in raw and "yaml" not in raw:
+                continue
+            else:
+                if "marshal" in raw:
+                    continue
+        if RE_PICKLE.search(raw):
+            if "load" in raw or "loads" in raw:
+                findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
+                                    "pickle 反序列化可执行任意代码", "改用 JSON/安全格式"))
+        if RE_YAML_UNSAFE.search(raw):
+            findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
+                                "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
+        elif RE_YAML_LOAD.search(raw) and "SafeLoader" not in raw and "UnsafeLoader" not in raw:
+            findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
+                                "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
+        if RE_EVAL.search(raw):
+            findings.append(hit(lineno, "deser.eval", "eval 外部输入",
+                                "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))
+        if RE_EXEC.search(raw):
+            findings.append(hit(lineno, "deser.exec", "exec 外部输入",
+                                "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
+    return findings
+# ----- 文件: rules/helpers.py (71 行) -----
+from __future__ import annotations
+import re
+from typing import Iterator, Optional, Tuple
+def _scan_line(
+    raw: str,
+    in_triple: bool,
+    triple_ch: str,
+    in_block: bool,
+) -> Tuple[str, bool, str, bool]:
+    chars: list[str] = []
+    n = len(raw)
+    i = 0
+    while i < n:
+        if in_block:
+            end = raw.find("*/", i)
+第 39 页 共 60 页
+cursor-scan V1.0
+
+            if end == -1:
+                return "".join(chars), in_triple, triple_ch, True
+            i = end + 2
+            in_block = False
+            continue
+        if in_triple:
+            end = raw.find(triple_ch * 3, i)
+            if end == -1:
+                return "".join(chars), True, triple_ch, False
+            i = end + 3
+            in_triple = False
+            continue
+        ch = raw[i]
+        if raw.startswith("/*", i):
+            in_block = True
+            i += 2
+            continue
+        if ch in "\"'" and raw.startswith(ch * 3, i):
+            in_triple = True
+            triple_ch = ch
+            i += 3
+            continue
+        if ch in "\"'`":
+            chars.append(ch)
+            i += 1
+            while i < n:
+                if raw[i] == "\\" and i + 1 < n:
+                    chars.extend((raw[i], raw[i + 1]))
+                    i += 2
+                    continue
+                if raw[i] == ch:
+                    chars.append(ch)
+                    i += 1
+                    break
+                chars.append(raw[i])
+                i += 1
+            continue
+        if ch == "#" or raw.startswith("//", i):
+            break
+        chars.append(ch)
+        i += 1
+    return "".join(chars), in_triple, triple_ch, in_block
+def code_lines(source: str) -> Iterator[Tuple[int, str]]:
+    in_triple = False
+    triple_ch = ""
+    in_block = False
+    for lineno, raw in enumerate(source.splitlines(), start=1):
+        reduced, in_triple, triple_ch, in_block = _scan_line(
+            raw, in_triple, triple_ch, in_block
+        )
+第 40 页 共 60 页
+cursor-scan V1.0
+
+        if _is_regex_definition(reduced):
+            continue  # regex pattern definitions must not match their own text
+        yield lineno, reduced
+_REGEX_DEFINITION = re.compile(r"\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:re\.)?(?:compile|fullmatch|match|search|findall|finditer|sub|split)\s*\(")
+def _is_regex_definition(reduced: str) -> bool:
+    return bool(_REGEX_DEFINITION.match(reduced))
+# ----- 文件: rules/injection.py (46 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_SQL_CONCAT_PY = re.compile(
+    r"\b(execute|executemany|cursor\.execute|db\.query|query_all|query_one|run_query|cursor3\.execute|db.execute)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
+    re.I,
+)
+RE_SQL_FSTRING_ASSIGN = re.compile(
+    r"""^\s*[A-Za-z_]\w*\s*=\s*f["'][^"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE).*\{[^}]+}""",
+    re.I,
+)
+RE_SQL_CONCAT_JS = re.compile(
+    r"\b(db\.(query|run|all|get)|mysql\.query|pg\.query|knex\.raw|sequelize\.query)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
+    re.I,
+)
+RE_SHELL_CONCAT = re.compile(
+    r"\b(subprocess\.(call|run|Popen|check_output|check_call)\s*\(\s*[\"'][^\"']*[\"']\s*\+|os\.system\s*\(\s*\w+.*\+|exec\s*\(\s*[\"'][^\"']*\+|spawn\s*\(\s*[\"']),",
+    re.I,
+)
+RE_DANGEROUS_SHELL = re.compile(
+    r"\b(shell\s*=\s*True|shell:\s*true)\b", re.I
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
+                        line=line, message=msg, fix=fix, dimension="injection")
+    for lineno, raw in code_lines(code):
+        if "import " in raw or "from " in raw:
+            continue
+        line = raw
+        if RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if RE_SQL_CONCAT_JS.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
+        if RE_SHELL_CONCAT.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
+第 41 页 共 60 页
+cursor-scan V1.0
+
+            findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
+                                "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))
+    return findings
+# ----- 文件: rules/permissions.py (28 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_CHMOD_0777 = re.compile(
+)
+RE_MKDIR_WORLD = re.compile(
+)
+RE_TMP_WRITE = re.compile(
+    r"\bopen\s*\(\s*[\"']/tmp/[^)\"']*",
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity="high", file=source_path,
+                        line=line, message=msg, fix=fix, dimension="permissions")
+    for lineno, raw in code_lines(code):
+        if RE_CHMOD_0777.search(raw):
+            findings.append(hit(lineno, "perms.chmod_world_writable", "世界可写 chmod",
+                                "设置文件/目录为 0777 或 0666，任何用户可写", "改为 0o600/0o700"))
+        if RE_MKDIR_WORLD.search(raw):
+            findings.append(hit(lineno, "perms.world_writable_dir", "世界可写目录",
+                                "以 0777 创建目录", "使用 0o700 (私有目录)"))
+        if RE_TMP_WRITE.search(raw):
+            findings.append(hit(lineno, "perms.tmp_write_insecure", "不安全 /tmp 写入",
+                                "直接写 /tmp 易受符号链接攻击 (symlink attack)", "使用 tempfile.mkstemp 私有文件"))
+    return findings
+# ----- 文件: rules/secrets.py (80 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_AWS_AKEY = re.compile(r"\b(AKIA|ASIA|ABCDEFGHIJKLMNOPQRSTUVWXYZ)[A-Z0-9]{16,20}\b")
+RE_AWS_SKEY = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")  # too noisy; keep as helper only
+RE_SLACK_TOKEN = re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")
+RE_GITHUB_TOKEN = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")
+RE_GOOGLE_API = re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b")
+RE_JWT_GENERIC = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.([A-Za-z0-9_-]{8,})?")
+RE_STRIPE = re.compile(r"\b(sk_live_[0-9A-Za-z]{20,}|rk_live_[0-9A-Za-z]{20,})\b")
+RE_PEM_PRIVATE = re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
+RE_OP_SSH = re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----")
+RE_GENERIC_KEY = re.compile(
+)
+STRONG_HINT_KEYS = re.compile(
+第 42 页 共 60 页
+cursor-scan V1.0
+
+    r"credential|auth|pem|salt|key)(?:_|$)",
+    re.I,
+)
+LOW_ENTROPY = re.compile(
+    r"""^["'"?]+$|^[0-9]{1,6}$|^(true|false|null|none|xxx|changeme|change_me|example|test|default)$|^[x*]{4,}$""",
+    re.I,
+)
+PLACEHOLDER_VALUES = re.compile(
+    r"^(your|my|example|sample|demo|replace|test|dummy|fake|changeme|change-me|local|prod|staging|dev|default|foo|bar|\.\.\.|xxxxx+)\w*$|^\{\{\w+\}\}$|^env\(.+\)$|^process\.env\..+$|^os\.environ\.get\(.+\)$|\$",
+    re.I,
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str, sev: str = "critical") -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity=sev, file=source_path,
+                        line=line, message=msg, fix=fix, dimension="secrets")
+    if RE_PEM_PRIVATE.search(code) or RE_OP_SSH.search(code):
+        for lineno, raw in enumerate(code.splitlines(), start=1):
+            if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
+                findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
+                                    "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
+    for lineno, raw in code_lines(code):
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
+            continue
+        if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
+            findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
+                                "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
+            continue
+        if RE_STRIPE.search(raw):
+            findings.append(hit(lineno, "secrets.stripe_key", "硬编码 Stripe 密钥",
+                                "检测到 live Stripe key", "使用环境变量 / 密钥管理"))
+            continue
+        if RE_GITHUB_TOKEN.search(raw):
+            findings.append(hit(lineno, "secrets.github_token", "硬编码 GitHub Token",
+                                "检测到 GitHub token", "改用环境变量，撤销泄露 token"))
+            continue
+        if RE_SLACK_TOKEN.search(raw):
+            findings.append(hit(lineno, "secrets.slack_token", "硬编码 Slack Token",
+                                "检测到 Slack bot token", "使用环境变量"))
+            continue
+        if RE_GOOGLE_API.search(raw):
+            findings.append(hit(lineno, "secrets.google_api_key", "硬编码 Google API Key",
+                                "检测到 Google API key", "使用环境变量 / Google Secret Manager"))
+            continue
+        if RE_AWS_AKEY.search(raw):
+            findings.append(hit(lineno, "secrets.aws_access_key", "硬编码 AWS 访问密钥 ID",
+                                "检测到 AWS Access Key ID", "移除，使用 IAM 角色 / AWS Secrets Manager"))
+第 43 页 共 60 页
+cursor-scan V1.0
+
+        m = RE_GENERIC_KEY.match(raw)
+        if m:
+            key, val = m.group("key"), m.group("val")
+            if STRONG_HINT_KEYS.search(key):
+                cleaned = val.strip("'\"")
+                if LOW_ENTROPY.match(cleaned) or PLACEHOLDER_VALUES.search(cleaned):
+                    continue
+                if len(cleaned) < 10:
+                    continue
+                findings.append(hit(lineno, "secrets.hardcoded_key", "硬编码密钥/口令",
+                                    f"变量 {key} 被赋为硬编码值", "改为从环境变量 / 密钥管理读取",
+                                    sev="high"))
+    return findings
+# ----- 文件: rules/xss.py (59 行) -----
+from __future__ import annotations
+import re
+from typing import List
+from ..models import Evidence
+from .helpers import code_lines
+RE_DOM_SINK = re.compile(
+    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]",
+    re.I,
+)
+RE_DANGEROUS_REACT = re.compile(
+    r"\bdangerouslySetInnerHTML\b",
+    re.I,
+)
+RE_DOCUMENT_WRITE = re.compile(
+    r"""\bdocument\.write(?:ln)?\s*\(\s*(?!["'`](?:[^"'`\\]|\\.)*["'`]\s*\))""",
+    re.I,
+)
+RE_DOC_TEMPLATE_INTERP = re.compile(
+    r"""\bdocument\.write(?:ln)?\s*\(\s*`[^`]*\$\{""",
+)
+RE_TEMPLATE_RENDER = re.compile(
+    r"\b(render_template_string|flask\.Markup|markupsafe\.Markup|\bMarkup)\s*\(",
+)
+RE_AUTOESCAPE_OFF = re.compile(
+    r"(\{%\s*autoescape\s+(false|off)\s*%\}|\|\s*safe\b)",
+)
+def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    findings: List[Evidence] = []
+    def hit(line: int, rule_id: str, title: str, msg: str, fix: str,
+            severity: str = "medium") -> Evidence:
+        return Evidence(rule_id=rule_id, title=title, severity=severity,
+                        file=source_path, line=line, message=msg, fix=fix,
+                        dimension="xss")
+    for lineno, raw in code_lines(code):
+        if "import " in raw or "from " in raw:
+            continue
+第 44 页 共 60 页
+cursor-scan V1.0
+
+        line = raw
+        if RE_DOM_SINK.search(line):
+            findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
+                                "用户输入可触发 XSS",
+                                "改用 textContent / innerText，或先做 HTML 转义"))
+        if RE_DANGEROUS_REACT.search(line):
+            findings.append(hit(lineno, "xss.dangerous_react", "React 危险 HTML",
+                                "dangerouslySetInnerHTML 直接渲染原始 HTML",
+                                "使用 React 子节点或先转义 __html 内容"))
+        if RE_DOCUMENT_WRITE.search(line) or RE_DOC_TEMPLATE_INTERP.search(line):
+            findings.append(hit(lineno, "xss.document_write", "document.write",
+                                "document.write 写入非字面量内容",
+                                "改用 DOM API (textContent / createElement)"))
+        if RE_TEMPLATE_RENDER.search(line):
+            findings.append(hit(lineno, "xss.template_render", "模板渲染未转义",
+                                "render_template_string / Markup 未转义地渲染用户输入",
+                                "启用自动转义并使用 render_template，避免 Markup 包裹用户输入",
+                                severity="high"))
+        if RE_AUTOESCAPE_OFF.search(line):
+            findings.append(hit(lineno, "xss.template_render", "关闭模板转义",
+                                "Jinja 自动转义被关闭或将变量标记为 safe",
+                                "保持 autoescape 开启，移除 |safe 过滤器"))
+    return findings
+# ----- 文件: scan.py (207 行) -----
+from __future__ import annotations
+import json
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Dict, Iterable, List, Optional, Tuple
+from .ignore import IgnorePattern, compile_ignores
+from .models import Evidence, ScanResult, Scorecard
+from .rules import (access_control, crypto, deps, deserialization, injection,
+                    permissions, secrets, xss)
+from .scanners import ast as ast_scanners
+SKIP_DIRS = {
+    ".git", ".hg", ".svn", ".bzr",
+    "node_modules", "bower_components",
+    ".venv", "venv", "env", "virtualenv",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".next", ".nuxt", "dist", "build", ".cache", ".tox", ".eggs",
+    ".future-code", ".idea", ".vscode",
+}
+SKIP_EXTS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".svg",
+    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".zip", ".tar", ".gz",
+    ".xz", ".bz2", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib", ".o", ".a",
+    ".pyc", ".pyo", ".class", ".jar", ".lock", ".min.js", ".map",
+第 45 页 共 60 页
+cursor-scan V1.0
+
+}
+_BINARY_RE = re.compile(rb"[\x00\x01\x02]")
+TEXT_EXTS = {
+    ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+    ".rb", ".php", ".go", ".rs", ".java", ".kt", ".sh", ".bash", ".zsh", ".pl",
+    ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".sql", ".vue",
+    ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
+    ".tf", ".cfg", ".conf",
+}
+ALWAYS_TEXT = {
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml", "Makefile",
+    "requirements.txt", "package.json", "package-lock.json", "Pipfile",
+    "Pipfile.lock", ".env", ".npmrc", ".pypirc", "Gemfile", "Gemfile.lock",
+    "composer.json", "go.mod", "go.sum", "Cargo.toml", "setup.py", "pyproject.toml",
+    "Procfile", ".gitlab-ci.yml", ".github", ".dockerignore", "README.md",
+}
+CONFIG_NAME = ".cursor-scan.json"
+@dataclass
+class ScanOptions:
+    max_bytes: int = 2 * 1024 * 1024  # skip files larger than 2 MB
+    follow_symlinks: bool = False
+    ignore_patterns: List[IgnorePattern] = field(default_factory=list)
+def _is_binary(data: bytes) -> bool:
+    head = data[:8192]
+    return bool(_BINARY_RE.search(head)) or b"\x00" in head
+def _read_text(path: str, max_bytes: int) -> Tuple[str, Optional[str]]:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return "", "unreadable"
+    if stat.st_size > max_bytes:
+        return "", "too_large"
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return "", "unreadable"
+    if _is_binary(data):
+        return "", "binary"
+    try:
+        return data.decode("utf-8", errors="strict"), None
+    except UnicodeDecodeError:
+        return data.decode("latin-1", errors="replace"), "encoding"
+def _iter_source_files(root: str, opts: ScanOptions) -> Iterable[str]:
+    root = os.path.abspath(root)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=opts.follow_symlinks):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in SKIP_DIRS and not d.startswith(".")
+        )
+第 46 页 共 60 页
+cursor-scan V1.0
+
+        for name in sorted(filenames):
+            if name == CONFIG_NAME:
+                continue  # the tool's own config is never scanned
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            low = name.lower()
+            ext = os.path.splitext(low)[1]
+            if ext in SKIP_EXTS:
+                continue
+            if low in ALWAYS_TEXT or ext in TEXT_EXTS:
+                yield rel
+def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
+    if not src:
+        return
+    lang = ast_scanners.lang_for_file(rel)
+    if lang == "python":
+        try:
+            ast_scanners.analyze_python(path_of(root, rel), src, findings)
+        except Exception as exc:  # never let one file crash a scan
+            findings.append(_internal_error(path_of(root, rel), exc))
+    elif lang in ("javascript", "typescript"):
+        try:
+            ast_scanners.analyze_jsts(path_of(root, rel), src, findings)
+        except Exception as exc:
+            findings.append(_internal_error(path_of(root, rel), exc))
+    for runner in (crypto, injection, deserialization, permissions):
+        findings.extend(runner.analyze_code(path_of(root, rel), src))
+    findings.extend(secrets.analyze_code(path_of(root, rel), src))
+    findings.extend(deps.analyze_code(path_of(root, rel), src))
+    findings.extend(xss.analyze_code(path_of(root, rel), src))
+def path_of(root: str, rel: str) -> str:
+    return os.path.join(root, rel)
+def _internal_error(path: str, exc: Exception) -> Evidence:
+    return Evidence(
+        rule_id="internal.scan_error",
+        title="扫描器异常",
+        severity="low",
+        file=path,
+        line=0,
+        message=f"AST 扫描失败: {exc}",
+        fix="检查文件语法",
+        dimension="injection",
+    )
+def _load_config(target: str) -> List[IgnorePattern]:
+    cfg = os.path.join(target, CONFIG_NAME)
+    if not os.path.isfile(cfg):
+        return []
+    try:
+        with open(cfg, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+第 47 页 共 60 页
+cursor-scan V1.0
+
+        return []
+    specs = doc.get("ignore", []) if isinstance(doc, dict) else []
+    if not isinstance(specs, list):
+        return []
+    return compile_ignores([s for s in specs if isinstance(s, str)])
+def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResult:
+    options = options or ScanOptions()
+    target = os.path.abspath(target)
+    started = time.monotonic()
+    result = ScanResult(
+        target=target,
+        started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    if not os.path.isdir(target):
+        raise NotADirectoryError(f"扫描目标不存在或不是目录: {target}")
+    patterns = list(options.ignore_patterns) + _load_config(target)
+    rels = sorted(_iter_source_files(target, options))
+    file_texts: Dict[str, List[Tuple[int, str]]] = {}
+    for rel in rels:
+        path = os.path.join(target, rel)
+        src, _ = _read_text(path, options.max_bytes)
+        if not src:
+            result.skipped_files += 1
+            continue
+        result.scanned_files += 1
+        _scan_file(target, rel, src, result.findings)
+        file_texts[rel] = list(enumerate(src.splitlines(), start=1))
+    access_control.analyze_project(file_texts, result.findings)
+    result.duration_sec = round(time.monotonic() - started, 3)
+    _finalize(result, patterns, target)
+    _backfill_snippets(result, file_texts, target)
+    return result
+def _backfill_snippets(result: ScanResult,
+                       file_texts: Dict[str, List[Tuple[int, str]]],
+                       target: str) -> None:
+    by_path: Dict[str, List[Tuple[int, str]]] = dict(file_texts)
+    for rel, lines in file_texts.items():
+        by_path[os.path.join(target, rel)] = lines
+    for f in list(result.findings) + list(result.suppressed):
+        if f.code_snippet or f.line <= 0:
+            continue
+        lines = by_path.get(f.file)
+        if lines is None:
+            try:
+                lines = by_path.get(os.path.relpath(f.file, target))
+            except ValueError:
+                lines = None
+        if lines and 0 < f.line <= len(lines):
+            f.code_snippet = lines[f.line - 1][1].strip()
+def _finalize(result: ScanResult, patterns: List[IgnorePattern] = (),
+第 48 页 共 60 页
+cursor-scan V1.0
+
+              target: str = "") -> None:
+    seen: set = set()
+    unique: List[Evidence] = []
+    for f in result.findings:
+        key = (f.rule_id, f.file, f.line)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(f)
+    unique.sort(key=lambda f: (f.file, f.line, f.rule_id))
+    result.findings = unique
+    suppressed: List[Evidence] = []
+    if patterns:
+        target_abs = os.path.abspath(target)
+        kept: List[Evidence] = []
+        for f in result.findings:
+            try:
+                rel = os.path.relpath(f.file, target_abs)
+            except ValueError:  # f.file on a different drive (Windows)
+                rel = f.file
+            if any(p.matches(f.rule_id, rel, f.line) for p in patterns):
+                suppressed.append(f)
+            else:
+                kept.append(f)
+        result.findings = kept
+        result.suppressed = suppressed
+    counts: Dict[str, int] = {}
+    for f in result.findings:
+        counts[f.severity] = counts.get(f.severity, 0) + 1
+    result.summary = counts
+    Scorecard.from_result(result)
+# ----- 文件: scanners/ast.py (287 行) -----
+from __future__ import annotations
+import tree_sitter_javascript
+import tree_sitter_python
+import tree_sitter_typescript
+from tree_sitter import Language, Parser
+from ..models import Evidence
+_LANG_CACHE: dict = {}
+def _language(name: str):
+    if name not in _LANG_CACHE:
+        if name == "python":
+            lang = Language(tree_sitter_python.language())
+        elif name == "javascript":
+            lang = Language(tree_sitter_javascript.language())
+        else:  # typescript
+            lang = Language(tree_sitter_typescript.language_typescript())
+        _LANG_CACHE[name] = lang
+    return _LANG_CACHE[name]
+_PARSER_CACHE: dict = {}
+第 49 页 共 60 页
+cursor-scan V1.0
+
+_ext_to_lang = {
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+}
+def lang_for_file(path: str):
+    import os
+    low = path.lower()
+    for ext, lang in _ext_to_lang.items():
+        if low.endswith(ext):
+            return lang
+    return None
+def _parser(lang: str) -> Parser:
+    if lang not in _PARSER_CACHE:
+        _PARSER_CACHE[lang] = Parser(_language(lang))
+    return _PARSER_CACHE[lang]
+def parse(source: str, lang: str):
+    return _parser(lang).parse(source.encode("utf-8", errors="surrogatepass"))
+def collect_calls(root, src: str):
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type in ("call", "call_expression"):
+            yield node
+        stack.extend(node.children)
+def call_fn_name(node, src: str) -> str:
+    fn = node.child_by_field_name("function")
+    if fn is None:
+        return ""
+    return src[fn.start_byte:fn.end_byte]
+def args_text(node, src: str) -> str:
+    args = node.child_by_field_name("arguments")
+    if args is None:
+        return ""
+    return src[args.start_byte:args.end_byte]
+def _line_for(node) -> int:
+    return node.start_point[0] + 1
+def _ev(rule_id, title, sev, path, line, msg, fix, dimension):
+    return Evidence(rule_id=rule_id, title=title, severity=sev, file=path, line=line,
+                    message=msg, fix=fix, dimension=dimension)
+def analyze_python(path, src, findings):
+    tree = parse(src, "python")
+    root = tree.root_node
+第 50 页 共 60 页
+cursor-scan V1.0
+
+    for call in collect_calls(root, src):
+        fn = call_fn_name(call, src)
+        args = args_text(call, src)
+        line = _line_for(call)
+        if fn in ("hashlib.md5", "hashlib.sha1", "md5", "sha1",
+                  "hashlib.new", "cryptography.hazmat.primitives.hashes.MD5",
+                  "cryptography.hazmat.primitives.hashes.SHA1"):
+            if fn.startswith("hashlib.new"):
+                if any(q in args for q in ('"md5"', "'md5'", '"sha1"', "'sha1'")):
+                    findings.append(_ev(
+                        "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                        f"hashlib.new 调用弱哈希 {args}", "改用 sha256", "crypto"))
+            elif fn == "md5" or fn == "sha1":
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "medium", path, line,
+                    f"调用 md5/sha1: {fn}()", "改用 sha256", "crypto"))
+            else:
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                    f"调用弱哈希 {fn}", "改用 sha256 (hashlib.sha256)", "crypto"))
+        if fn in ("AES.new", "AES", "DES.new", "DES3.new", "DES", "TripleDES.new",
+                  "Crypto.Cipher.DES.new", "Crypto.Cipher.DES3.new",
+                  "cryptography.hazmat.primitives.ciphers.algorithms"):
+            if "MODE.ECB" in args or "ECB" in args:
+                findings.append(_ev(
+                    "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
+                    f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
+            if fn.startswith("DES") or "DES3" in fn:
+                findings.append(_ev(
+                    "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
+                    f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
+            m = _find_kw_literal(call, src, ("iv", "nonce"))
+            if m:
+                findings.append(_ev(
+                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
+                    f"加密调用 {fn} 使用固定 IV {m[2]}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
+        if fn.endswith(".new") and ("MODE.ECB" in args or "CipherMode.ECB" in args):
+            findings.append(_ev(
+                "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
+                f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
+        if fn in ("random.seed", "np.random.seed", "numpy.random.seed",
+                  "torch.manual_seed", "torch.random.manual_seed", "random.seedfn"):
+            seed_val = _arg_literal(call, src)
+            if seed_val is not None and _is_literal_scalar(seed_val):
+                findings.append(_ev(
+                    "crypto.hardcoded_seed", "硬编码随机种子", "medium", path, line,
+                    f"随机种子被硬编码为 {seed_val}", "改为随机种子 (os.urandom) 或可配置", "crypto"))
+        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads"):
+            findings.append(_ev(
+                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+第 51 页 共 60 页
+cursor-scan V1.0
+
+                f"pickle 反序列化 {args}", "改用 JSON / 安全序列化格式", "deserialization"))
+        if fn in ("yaml.load", "yaml.full_load_all", "yaml.load_all"):
+            if not _yaml_safe(fn, call, src, args):
+                findings.append(_ev(
+                    "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
+                    f"yaml.load 未使用安全 Loader", "改用 yaml.safe_load(data)", "deserialization"))
+        if fn == "yaml.unsafe_load" or fn == "yaml.unsafe_load_all":
+            findings.append(_ev(
+                "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
+                "显式调用 yaml.unsafe_load", "改用 yaml.safe_load", "deserialization"))
+        if fn == "eval" or fn.endswith("(eval") or fn in ("exec", "compile"):
+            if _has_external_input(call, src, args):
+                findings.append(_ev(
+                    "deser.eval", "eval/exec 外部输入", "critical", path, line,
+                    f"{fn} 接收外部输入: {args}", "重构，不使用 eval/exec 解析数据", "deserialization"))
+        if fn.endswith(".execute") or fn in ("cursor.execute", "db.execute", "conn.execute",
+                                              "execute", "executemany", "cursor3.execute",
+                                              "mysql.cursor.execute"):
+            if _contains_sql(args) and _has_concat(args):
+                findings.append(_ev(
+                    "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
+                    f"SQL 通过字符串拼接: {args}", "使用参数化查询 (?, %s)", "injection"))
+        if fn in ("os.system",) or fn.startswith("subprocess."):
+            if "shell=True" in args or "shell = True" in args:
+                if _has_concat(args):
+                    findings.append(_ev(
+                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                        f"subprocess 开放 shell 且拼接命令: {args}", "传入参数列表, 关闭 shell", "injection"))
+            if _has_concat(args) and fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
+                                            "subprocess.check_output", "subprocess.check_call",
+                                            "os.system"):
+                findings.append(_ev(
+                    "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                    f"命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
+        if fn == "os.chmod" or "chmod" in fn:
+            mode = _last_arg(call, src)
+            if _is_0777(mode) or _is_0666(mode):
+                findings.append(_ev(
+                    "perms.chmod_world_writable", "世界可写 chmod", "high", path, line,
+                    f"os.chmod 权限 {mode} 世界可写", "使用 0o600/0o700", "permissions"))
+        if "makedirs" in fn or fn == "os.makedirs" or fn == "mkdir" or fn == "os.mkdir":
+            mode = _last_arg(call, src)
+            if _is_0777(mode):
+                findings.append(_ev(
+                    "perms.world_writable_dir", "世界可写目录", "high", path, line,
+                    f"目录创建权限 {mode} 世界可写", "使用 0o700", "permissions"))
+def _find_kw_literal(call, src, names):
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return None
+第 52 页 共 60 页
+cursor-scan V1.0
+
+    for a in args.named_children:
+        if a.type in ("keyword_argument", "keyed_element"):
+            kw = a.child_by_field_name("name")
+            val = a.child_by_field_name("value")
+            if kw is None or val is None:
+                continue
+            kwname = src[kw.start_byte:kw.end_byte]
+            if kwname in names:
+                vtxt = src[val.start_byte:val.end_byte]
+                return (vtxt, kw, val)
+    return None
+def _arg_literal(call, src):
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return None
+    named = args.named_children
+    if not named:
+        return None
+    first = named[0]
+    return src[first.start_byte:first.end_byte]
+def _is_literal_scalar(txt: str) -> bool:
+    t = txt.strip()
+    if not t:
+        return False
+    if t.lower() in {"none", "true", "false"}:
+        return False
+    if t.startswith(("'", '"', "b'", 'b"')):
+        return True
+    return t.lstrip("-").isdigit()
+def _last_arg(call, src):
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return ""
+    named = args.named_children
+    if not named:
+        return ""
+    last = named[-1]
+    return src[last.start_byte:last.end_byte]
+def _is_0777(mode: str) -> bool:
+    return mode.strip() in {"0o777", "0O777", "0o7777", "777", "0x1ff", "0o666", "0666", "0O666", "666"}
+def _is_0666(mode: str) -> bool:
+    return mode.strip() in {"0o666", "0O666", "0666", "666"}
+def _yaml_safe(fn, call, src, args):
+    if "SafeLoader" in args or "FullLoader" not in args and "Loader=yaml." in args:
+        return "SafeLoader" in args
+    return False
+def _contains_sql(args: str) -> bool:
+    return any(w in args.upper() for w in ("SELECT ", "INSERT ", "UPDATE ", "DELETE ", "DROP ", "CREATE ",
+                                           "SELECT", "INSERT", "UPDATE", "DELETE"))
+def _has_concat(args: str) -> bool:
+第 53 页 共 60 页
+cursor-scan V1.0
+
+    return (" + " in args or "+" in args or "%s" in args and " % " in args)
+def _has_external_input(call, src, args) -> bool:
+    ext = ("request.", "input(", "sys.argv", "os.environ", ".form[", ".json(", ".body",
+           "req.", "ctx.", "kwargs", "data[", "params", "args[")
+    low = args.lower()
+    return any(x.lower() in low for x in ext)
+def analyze_jsts(path, src, findings):
+    tree = parse(src, "typescript" if path.endswith((".ts", ".tsx", ".mts", ".cts")) else "javascript")
+    root = tree.root_node
+    for call in collect_calls(root, src):
+        fn = call_fn_name(call, src)
+        args = args_text(call, src)
+        line = _line_for(call)
+        if fn.endswith(".createHash") or fn == "createHash":
+            if any(a in args for a in ("'md5'", '"md5"', "'sha1'", '"sha1"')):
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                    f"使用 MD5/SHA1 哈希: {args}", "改用 sha256", "crypto"))
+            elif any(a in args for a in ("'sha256'", '"sha256"', "'sha512'", '"sha512"')):
+                pass
+        if "ECB" in args or "CipherMode.ECB" in args:
+            findings.append(_ev(
+                "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
+                f"使用 ECB 加密模式: {fn}({args})", "改用 GCM", "crypto"))
+        if fn in ("des.createCipheriv", "des.createCipher") or "DES" in fn:
+            findings.append(_ev(
+                "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
+                f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
+        if fn in ("eval", "new Function"):
+            if _js_external(args):
+                findings.append(_ev(
+                    "deser.eval", "eval 外部输入", "critical", path, line,
+                    f"eval/Function 处理外部输入: {args}", "重构，不使用 eval", "deserialization"))
+        if _fn_is_db_query(fn):
+            if _contains_sql(args) and _has_concat(args):
+                findings.append(_ev(
+                    "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
+                    f"SQL 通过字符串拼接: {args}", "使用参数化查询 ($1)", "injection"))
+        if fn in ("exec", "execa", "spawn") or fn.endswith(".exec") or fn.endswith(".spawn"):
+            if "shell" in args.lower() and _has_concat(args):
+                findings.append(_ev(
+                    "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                    f"{fn} 开启 shell 并拼接命令: {args}", "使用参数列表", "injection"))
+            elif _has_concat(args):
+                findings.append(_ev(
+                    "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                    f"命令字符串由拼接构造: {args}", "使用参数列表", "injection"))
+        if fn == "fs.chmod" or fn.endswith(".chmod") or fn == "chmodSync":
+            mode = _last_arg(call, src)
+            m = mode.replace("0o", "").replace("0x", "")
+第 54 页 共 60 页
+cursor-scan V1.0
+
+            if mode in ("0o777", "777") or "0o666" in mode:
+                findings.append(_ev(
+                    "perms.chmod_world_writable", "世界可写 chmod", "high", path, line,
+                    f"fs.chmod 权限 {mode} 世界可写", "使用 0o600", "permissions"))
+        if "writeFile" in fn or "writeFileSync" in fn:
+            args_body = args
+            if "/tmp" in args_body:
+                findings.append(_ev(
+                    "perms.tmp_write_insecure", "不安全 /tmp 写入", "medium", path, line,
+                    "直接写 /tmp 易受符号链接攻击", "使用 os.tmpdir()+mkstemp 私有文件", "permissions"))
+def _fn_is_db_query(fn: str) -> bool:
+    fn = fn.lower()
+    return any(k in fn for k in ("db.query", ".query(", ".run(", ".all(", ".get(",
+                                 "mysql.query", "pg.query", "knex.raw", "sequelize.query",
+                                 "prisma.")) or fn.endswith(".execute")
+def _js_external(args: str) -> bool:
+    low = args.lower()
+    return any(x in low for x in ("req.", "request.", "query.", "body.", "ctx.",
+                                  "process.env", "input", "form", "url."))
+# ----- 文件: webapp.py (280 行) -----
+from __future__ import annotations
+import functools
+import glob
+import html
+import json
+import os
+import re
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Dict, Optional, Tuple
+from .history import (default_history_dir, diff_snapshots, list_history,
+                      load_snapshot, resolve_snapshot)
+from .models import DIMENSION_LABELS, SEVERITY_ORDER
+CONTENT_HTML = "text/html; charset=utf-8"
+CONTENT_JSON = "application/json; charset=utf-8"
+_SEV_CLASS = {"critical": "critical", "high": "high",
+              "medium": "medium", "low": "low"}
+def route(history_dir: str, raw_path: str,
+          query: Optional[Dict[str, str]] = None) -> Tuple[int, str, bytes]:
+    hd = os.path.realpath(history_dir)
+    path = raw_path.rstrip("/") or "/"
+    query = query or {}
+    if path == "/":
+        return _page_index(hd)
+    if path == "/api/history.json":
+        return _api_history(hd)
+    if path.startswith("/api/snapshot/"):
+        return _api_snapshot(hd, path[len("/api/snapshot/"):])
+    if path.startswith("/snapshot/"):
+        return _page_snapshot(hd, path[len("/snapshot/"):])
+第 55 页 共 60 页
+cursor-scan V1.0
+
+    if path == "/diff":
+        return _page_diff(hd, query)
+    return _page_error(hd, 404, "未知路径", f"路径 {raw_path!r} 不存在。")
+def _safe_snapshot_path(history_dir: str, name: str) -> Optional[str]:
+    if not name or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        return None
+    hd_real = os.path.realpath(history_dir)
+    candidate = os.path.realpath(os.path.join(hd_real, name))
+    if not (candidate == hd_real
+            or candidate.startswith(hd_real.rstrip(os.sep) + os.sep)):
+        return None
+    if os.path.isfile(candidate):
+        return candidate
+    try:
+        return resolve_snapshot(name, hd_real)
+    except FileNotFoundError:
+        return None
+def _json(status: int, doc: dict) -> Tuple[int, str, bytes]:
+    payload = json.dumps(doc, ensure_ascii=False, indent=2)
+    return status, CONTENT_JSON, payload.encode("utf-8")
+def _api_history(history_dir: str) -> Tuple[int, str, bytes]:
+    entries = list_history(history_dir)
+    doc = {
+        "entries": [{
+            "file": os.path.basename(e.path),
+            "target": e.target,
+            "started_at": e.started_at,
+            "score": e.score,
+            "grade": e.grade,
+            "findings": e.findings,
+            "scanned_files": e.scanned_files,
+        } for e in entries],
+    }
+    return _json(200, doc)
+def _api_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
+    path = _safe_snapshot_path(history_dir, name)
+    if path is None and name.endswith(".json"):
+        path = _safe_snapshot_path(history_dir, name[:-len(".json")])
+    if path is None:
+        return _json(404, {"error": f"未找到快照: {name!r}"})
+    return _json(200, load_snapshot(path))
+def _e(value) -> str:
+    return html.escape(str(value if value is not None else ""), quote=True)
+def _grade_class(grade: str) -> str:
+    return f"grade-{str(grade).lower()}"
+def _ordered_findings(findings: list) -> list:
+    def key(f):
+        sev = f.get("severity", "low")
+        return (-SEVERITY_ORDER.get(sev, 1),
+                f.get("file", ""), f.get("line", 0))
+第 56 页 共 60 页
+cursor-scan V1.0
+
+    return sorted(findings, key=key)
+_PAGE_CSS = """\
+def _page(title: str, body: str, nav: str = "",
+          status: int = 200) -> Tuple[int, str, bytes]:
+    title_html = _e(title) if status == 200 else f"{status} {_e(title)}"
+    doc = (
+        f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{title_html} - cursor-scan</title>"
+        f"<style>{_PAGE_CSS}</style></head><body>"
+        f"<div class=\"wrap\"><header><h1>{title_html}</h1>"
+        f"<p class=\"sub\">cursor-scan 离线仪表板</p></header>{nav}{body}"
+    )
+    return status, CONTENT_HTML, doc.encode("utf-8")
+def _page_error(history_dir: str, status: int, title: str,
+                msg: str) -> Tuple[int, str, bytes]:
+    nav = '<p><a href="/">← 历史列表</a></p>'
+    body = f'<div class="card"><p>{_e(msg)}</p></div>'
+    return _page(title, body, nav, status=status)
+def _findings_table(findings: list) -> str:
+    if not findings:
+        return '<p class="muted">没有发现问题。</p>'
+    rows = []
+    for f in findings:
+        sev = f.get("severity", "low")
+        snippet = f.get("code_snippet")
+        snip = f'<pre class="snippet">{_e(snippet)}</pre>' if snippet else ""
+        rows.append(
+            .format(
+                cls=_SEV_CLASS.get(sev, "low"), sev=sev.upper(),
+                rule=_e(f.get("rule_id", "")),
+                dim=_e(DIMENSION_LABELS.get(f.get("dimension", ""),
+                                            f.get("dimension", ""))),
+                file=_e(f.get("file", "")), line=f.get("line", "?"),
+                msg=_e(f.get("message", "")), snip=snip,
+                fix=_e(f.get("fix", "")),
+            )
+        )
+    return (
+        "<th>说明</th><th>修复建议</th></tr>" + "".join(rows) + "</table>"
+    )
+def _page_index(history_dir: str) -> Tuple[int, str, bytes]:
+    entries = list_history(history_dir)
+    nav = ""
+    if not entries:
+        body = ("<div class=\"card\"><p>没有保存的扫描历史。</p>"
+                "再回到这里查看。</p></div>")
+        return _page("扫描历史", body, nav)
+    rows = []
+    for e in entries:
+        name = os.path.basename(e.path)
+第 57 页 共 60 页
+cursor-scan V1.0
+
+        rows.append(
+            .format(started=_e(e.started_at), target=_e(e.target),
+                    grade_cls=_grade_class(e.grade), score=_e(e.score),
+                    grade=_e(e.grade), findings=e.findings,
+                    files=e.scanned_files,
+                    name=urllib.parse.quote(name))
+        )
+    table = ("<table><tr><th>时间</th><th>目标</th><th>评分</th><th>等级</th>"
+             + "".join(rows) + "</table>")
+    def options(selected_idx: int) -> str:
+        out = []
+        for i, e in enumerate(entries):
+            sel = " selected" if i == selected_idx else ""
+            label = (f"{e.started_at}  {e.target}  "
+                     f"({e.score}/100 {e.grade})")
+            out.append(f'<option value="{urllib.parse.quote(os.path.basename(e.path))}"{sel}>'
+                       f"{_e(label)}</option>")
+        return "".join(out)
+    before_idx = 1 if len(entries) >= 2 else 0
+    after_idx = 0
+    form = (
+        f'<select name="before">{options(before_idx)}</select>'
+        f'<select name="after">{options(after_idx)}</select>'
+    )
+    body = (
+        + form + "</div>"
+        + '<div class="card">' + table + "</div>"
+    )
+    return _page("扫描历史", body, nav)
+def _page_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
+    path = _safe_snapshot_path(history_dir, name)
+    if path is None:
+        return _page_error(history_dir, 404, "快照不存在",
+                           f"未找到快照: {name!r}")
+    doc = load_snapshot(path)
+    nav = '<p><a href="/">← 历史列表</a></p>'
+    header = _score_header(doc)
+    dims = "".join(
+        .format(score=_e(dim.get("score", 0)),
+                cls=_grade_class(doc.get("grade", "?")),
+                label=_e(DIMENSION_LABELS.get(d, d)))
+        for d, dim in sorted(doc.get("dimensions", {}).items())
+    ) or '<p class="muted">无维度评分</p>'
+    table = _findings_table(doc.get("findings", []))
+    suppressed = doc.get("suppressed", [])
+    body = (header + '<div class="card"><h2>维度评分</h2>' + dims + "</div>"
+            + '<div class="card"><h2>逐项证据</h2>' + table + "</div>")
+    if suppressed:
+        body += (
+            .format(n=len(suppressed), inner=_findings_table(suppressed))
+第 58 页 共 60 页
+cursor-scan V1.0
+
+        ) + "</div>"
+    return _page(f"快照 {os.path.basename(path)}", body, nav)
+def _score_header(doc: dict) -> str:
+    return (
+    ).format(
+        score=_e(doc.get("score", 0)),
+        grade_cls=_grade_class(doc.get("grade", "?")),
+        grade=_e(doc.get("grade", "?")),
+        target=_e(doc.get("target", "?")),
+        started=_e(doc.get("started_at", "?")),
+        scanned=doc.get("scanned_files", 0),
+        skipped=doc.get("skipped_files", 0),
+        findings=len(doc.get("findings", [])),
+        suppressed=len(doc.get("suppressed", [])),
+        dur=doc.get("duration_sec", "?"),
+    )
+def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes]:
+    nav = '<p><a href="/">← 历史列表</a></p>'
+    before_ref, after_ref = query.get("before", ""), query.get("after", "")
+    before_path = _safe_snapshot_path(history_dir, before_ref)
+    after_path = _safe_snapshot_path(history_dir, after_ref)
+    if before_path is None or after_path is None:
+        return _page_error(history_dir, 404, "快照不存在",
+                           "至少一个快照引用未找到；请从历史列表中选择。")
+    before, after = load_snapshot(before_path), load_snapshot(after_path)
+    diff = diff_snapshots(before, after)
+    delta = diff.score_delta
+    delta_html = (f'<span class="delta-up">+{delta}</span>' if delta > 0
+                  else f'<span class="delta-down">{delta}</span>' if delta < 0
+                  else '<span class="muted">0</span>')
+    partitions = [("新增", diff.added), ("修复", diff.fixed),
+                  ("忽略", diff.suppressed), ("取消忽略", diff.unsuppressed)]
+    counts = "、".join(f"{t} {len(items)}" for t, items in partitions)
+    score_row = (
+        f'<div class="card"><h2>评分变化</h2>'
+        f'<p class="muted">{_e(os.path.basename(before_path))}  →  '
+        f'{_e(os.path.basename(after_path))}</p>'
+        f'<span class="score">{before.get("score", "?")}</span>'
+        f'<span style="font-size:24px;padding:0 12px">→</span>'
+        f'<span class="score">{after.get("score", "?")}</span>'
+        f'<span style="padding-left:12px">({delta_html})</span>'
+        f'<p>等级 {_e(before.get("grade", "?"))} → '
+        f'{_e(after.get("grade", "?"))}；{_e(counts)}。</p></div>'
+    )
+    def section(title: str, findings: list) -> str:
+        details = (
+            f'<details class="card" open><summary style="cursor:pointer">'
+            f'<h2 style="display:inline;margin:0">{title}'
+            f'（{len(findings)}）</h2></summary>'
+            + _findings_table(findings) + "</details>"
+第 59 页 共 60 页
+cursor-scan V1.0
+
+        ) if findings else ""
+        return details
+    body = score_row
+    for title, items in (("新增", diff.added), ("修复", diff.fixed),
+                         ("忽略（后一次扫描中被抑制）", diff.suppressed),
+                         ("取消忽略", diff.unsuppressed)):
+        body += section(title, items)
+    kept = ("<details class=\"card\"><summary style=\"cursor:pointer\">"
+            f"仍在的问题（{len(diff.kept)}）</summary>"
+            + _findings_table(diff.kept) + "</details>"
+            if diff.kept else "")
+    body += kept
+    return _page("扫描差异", body, nav)
+class DashboardHandler(BaseHTTPRequestHandler):
+    history_dir: str = "."
+    def __init__(self, *args, history_dir: Optional[str] = None, **kwargs):
+        if history_dir is not None:
+            self.history_dir = history_dir
+        super().__init__(*args, **kwargs)
+    def do_GET(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+        status, mime, body = route(self.history_dir, parsed.path, query)
+        self.send_response(status)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+    def log_message(self, *args):  # keep the dashboard console quiet
+        pass
+def make_server(history_dir: str, host: str = "127.0.0.1", port: int = 0):
+    hd = os.path.realpath(history_dir)
+    handler = functools.partial(DashboardHandler, history_dir=hd)
+    return ThreadingHTTPServer((host, port), handler)
+def run_dashboard(history_dir: Optional[str] = None, host: str = "127.0.0.1",
+                  port: int = 8080) -> int:
+    hd = history_dir or default_history_dir()
+    os.makedirs(hd, exist_ok=True)
+    httpd = make_server(hd, host, port)
+    print(f"cursor-scan dashboard: http://{host}:{httpd.server_address[1]}/")
+    print(f"history: {os.path.realpath(hd)}   (Ctrl+C 退出)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+    return 0
+第 60 页 共 60 页
