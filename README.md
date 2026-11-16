@@ -51,6 +51,7 @@ cursor-scan --serve            # 启动离线 Web 仪表板 (http://127.0.0.1:80
 | `--format` | `text` / `json` / `sarif` | `text` |
 | `--fail-on` | 门禁严重度 `low`/`medium`/`high`/`critical` | `high` |
 | `--max-bytes` | 超过该字节数（文件）跳过，计入 skipped | 2 MiB |
+| `--ignore` | 抑制匹配的发现（可重复）。单个 glob 匹配规则 ID / 文件名 / 相对路径；`RULE[:FILE[:LINE]]` 分字段匹配 | |
 | `--history-dir` | 扫描快照保存目录 | `./history` |
 | `--no-save` | 不写入历史快照 | |
 | `--history` | 列出已保存的扫描快照（最新在前） | |
@@ -60,6 +61,29 @@ cursor-scan --serve            # 启动离线 Web 仪表板 (http://127.0.0.1:80
 | `--version` | 打印版本 | |
 
 退出码：`0` 完成且无达到门禁的发现；`1` 有达到门禁的发现；`2` 用法/环境错误（如目录不存在、无权限）。
+
+## 忽略误报
+
+`--ignore`（可重复）或项目根目录 `.cursor-scan.json` 里的 `"ignore"` 列表可抑制
+特定发现的报告与评分（被抑制者计入职级门禁判定之外的 `suppressed` 列表，仍在
+text 报告与 JSON 输出的 `suppressed` 字段中可见）：
+
+```bash
+cursor-scan . --ignore 'deps.*' --ignore 'injection.sql_concat:app.py'
+```
+
+```json
+{ "ignore": ["secrets.hardcoded_key", "perms.*:tmpclean.sh"] }
+```
+
+两种模式：
+
+- 单个 glob（`fnmatch` 语义，区分大小写）——匹配**任意一个**：规则 ID、文件名、相对路径。
+  如 `crypto.*` 抑制全部弱密码学规则；`tests/*.py` 抑制 `tests/` 下所有发现。
+- `RULE[:FILE[:LINE]]`——已给出的字段必须**全部**匹配。例如 `injection.sql_concat:app.py`
+  只抑制 `app.py` 中的 SQL 拼接，`injection.sql_concat:app.py:11` 进一步限到第 11 行。
+
+CLI 与配置文件可以并存；门禁（`--fail-on`）只评估未被抑制的发现。
 
 ## 扫描历史
 

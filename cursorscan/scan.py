@@ -9,6 +9,7 @@ a per-dimension scorecard.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from .ignore import IgnorePattern, compile_ignores
 from .models import Evidence, ScanResult, Scorecard
 from .rules import (access_control, crypto, deps, deserialization, injection,
                     permissions, secrets)
@@ -62,12 +64,17 @@ ALWAYS_TEXT = {
 }
 
 
+# Base filename of the optional per-project suppression config.
+CONFIG_NAME = ".cursor-scan.json"
+
+
 @dataclass
 class ScanOptions:
     """Tunables for a scan run."""
 
     max_bytes: int = 2 * 1024 * 1024  # skip files larger than 2 MB
     follow_symlinks: bool = False
+    ignore_patterns: List[IgnorePattern] = field(default_factory=list)
 
 
 def _is_binary(data: bytes) -> bool:
@@ -106,6 +113,8 @@ def _iter_source_files(root: str, opts: ScanOptions) -> Iterable[str]:
             if d not in SKIP_DIRS and not d.startswith(".")
         )
         for name in sorted(filenames):
+            if name == CONFIG_NAME:
+                continue  # the tool's own config is never scanned
             rel = os.path.relpath(os.path.join(dirpath, name), root)
             low = name.lower()
             ext = os.path.splitext(low)[1]
@@ -156,6 +165,26 @@ def _internal_error(path: str, exc: Exception) -> Evidence:
     )
 
 
+def _load_config(target: str) -> List[IgnorePattern]:
+    """Load ``.cursor-scan.json`` from the target; return ignore patterns.
+
+    A missing or malformed config is ignored (a warning would spam every scan
+    on projects that never heard of this file).
+    """
+    cfg = os.path.join(target, CONFIG_NAME)
+    if not os.path.isfile(cfg):
+        return []
+    try:
+        with open(cfg, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    specs = doc.get("ignore", []) if isinstance(doc, dict) else []
+    if not isinstance(specs, list):
+        return []
+    return compile_ignores([s for s in specs if isinstance(s, str)])
+
+
 def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResult:
     """Scan a project directory and return the aggregate result."""
     options = options or ScanOptions()
@@ -168,6 +197,10 @@ def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResu
 
     if not os.path.isdir(target):
         raise NotADirectoryError(f"扫描目标不存在或不是目录: {target}")
+
+    # CLI --ignore patterns are combined with any in the config file, so both
+    # sources are always honoured.
+    patterns = list(options.ignore_patterns) + _load_config(target)
 
     rels = sorted(_iter_source_files(target, options))
     file_texts: Dict[str, List[Tuple[int, str]]] = {}
@@ -186,12 +219,13 @@ def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResu
     access_control.analyze_project(file_texts, result.findings)
 
     result.duration_sec = round(time.monotonic() - started, 3)
-    _finalize(result)
+    _finalize(result, patterns, target)
     return result
 
 
-def _finalize(result: ScanResult) -> None:
-    """Deduplicate and sort findings, then compute the scorecard."""
+def _finalize(result: ScanResult, patterns: List[IgnorePattern] = (),
+              target: str = "") -> None:
+    """Deduplicate findings, split out suppressed ones, then score the rest."""
     seen: set = set()
     unique: List[Evidence] = []
     for f in result.findings:
@@ -205,8 +239,24 @@ def _finalize(result: ScanResult) -> None:
     unique.sort(key=lambda f: (f.file, f.line, f.rule_id))
     result.findings = unique
 
+    suppressed: List[Evidence] = []
+    if patterns:
+        target_abs = os.path.abspath(target)
+        kept: List[Evidence] = []
+        for f in result.findings:
+            try:
+                rel = os.path.relpath(f.file, target_abs)
+            except ValueError:  # f.file on a different drive (Windows)
+                rel = f.file
+            if any(p.matches(f.rule_id, rel, f.line) for p in patterns):
+                suppressed.append(f)
+            else:
+                kept.append(f)
+        result.findings = kept
+        result.suppressed = suppressed
+
     counts: Dict[str, int] = {}
-    for f in unique:
+    for f in result.findings:
         counts[f.severity] = counts.get(f.severity, 0) + 1
     result.summary = counts
 

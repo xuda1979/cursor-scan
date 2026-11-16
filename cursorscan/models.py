@@ -59,6 +59,7 @@ class ScanResult:
     grade: str = "A"
     dimensions: Dict[str, "DimensionScore"] = field(default_factory=dict)
     summary: Dict[str, int] = field(default_factory=dict)
+    suppressed: List[Evidence] = field(default_factory=list)
 
     def add(self, evidence: Evidence) -> None:
         self.findings.append(evidence)

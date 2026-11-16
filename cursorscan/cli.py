@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from . import __version__
 from .history import (diff_snapshots, list_history, load_snapshot,
                       resolve_snapshot, result_to_dict, save_snapshot)
+from .ignore import compile_ignores
 from .models import Evidence, ScanResult, SEVERITY_ORDER
 from .scan import ScanOptions, scan_project
 
@@ -42,6 +43,12 @@ def _arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--fail-on", choices=SEVERITY_NAMES, default="high",
         help="exit 1 when findings at/above this severity exist (default: high)",
+    )
+    p.add_argument(
+        "--ignore", action="append", default=[], metavar="PATTERN",
+        help="suppress matching findings; repeatable. A glob matches the rule id, "
+             "file basename or relative path; RULE[:FILE[:LINE]] matches by parts. "
+             "Patterns can also be listed as \"ignore\" in .cursor-scan.json",
     )
     p.add_argument(
         "--max-bytes", type=int, default=2 * 1024 * 1024,
@@ -80,7 +87,8 @@ def _env_toggle(name: str) -> bool:
 
 def main(argv: List[str] | None = None) -> int:
     args = _arg_parser().parse_args(argv)
-    options = ScanOptions(max_bytes=args.max_bytes)
+    options = ScanOptions(max_bytes=args.max_bytes,
+                          ignore_patterns=compile_ignores(args.ignore))
 
     if args.history:
         return _cmd_history(args.history_dir)
@@ -188,6 +196,7 @@ def result_to_dict(result: ScanResult) -> dict:
             for d, dim in sorted(result.dimensions.items())
         },
         "findings": [evidence_to_dict(f) for f in result.findings],
+        "suppressed": [evidence_to_dict(f) for f in result.suppressed],
     }
 
 
@@ -287,6 +296,7 @@ def print_text_report(result: ScanResult) -> None:
         print(f"  {d.dimension:<15} {d.score:>3}/100  {d.count} 个发现")
     total = len(result.findings)
     if total == 0:
+        _print_suppressed(result)
         print("\n没有发现安全问题。")
         return
     print(f"\n发现 {total} 个问题:")
@@ -296,6 +306,16 @@ def print_text_report(result: ScanResult) -> None:
         print(f"      {f.message}")
         if f.fix:
             print(f"      修复: {f.fix}")
+    _print_suppressed(result)
+
+
+def _print_suppressed(result: ScanResult) -> None:
+    """Append a note for findings that matched --ignore / config patterns."""
+    if not result.suppressed:
+        return
+    print(f"\n已忽略 {len(result.suppressed)} 个发现 (匹配忽略规则):")
+    for f in result.suppressed:
+        print(f"  [{f.severity.upper():<8}] {f.rule_id}  {f.file}:{f.line}")
 
 
 if __name__ == "__main__":
