@@ -437,8 +437,11 @@ def analyze_jsts(path, src, findings):
 
         # hardcoded seed (Math.random / crypto not seedable in JS; skip)
 
-        # unsafe deserialization: eval( on external
-        if fn == "eval":
+        # unsafe deserialization: eval( on external.  ``Function`` is the
+        # constructor twin of eval: ``new Function`` parses as a
+        # new_expression (handled on its own pass below), while a plain
+        # ``Function(...)`` call or ``window.Function(...)`` lands here.
+        if fn == "eval" or fn == "Function" or fn.endswith(".Function"):
             if _js_external(args):
                 findings.append(_ev(
                     "deser.eval", "eval 外部输入", "critical", path, line,
@@ -453,8 +456,14 @@ def analyze_jsts(path, src, findings):
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
                     f"SQL 通过字符串拼接: {args}", "使用参数化查询 ($1)", "injection"))
 
-        # shell: exec/spawn with shell and concat
-        if fn in ("exec", "execa", "spawn") or fn.endswith(".exec") or fn.endswith(".spawn"):
+        # shell: exec/spawn with shell and concat.  execSync / spawnSync /
+        # fork are the synchronous / child forms of the same commands and
+        # carry the identical injection surface; ``require('child_process')
+        # .execSync(...)`` surfaces as fn ending in ``.execSync``.
+        if (fn in ("exec", "execa", "spawn", "execSync", "spawnSync", "fork")
+                or fn.endswith(".exec") or fn.endswith(".spawn")
+                or fn.endswith(".execSync") or fn.endswith(".spawnSync")
+                or fn.endswith(".fork")):
             if "shell" in args.lower() and _has_concat(args):
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,

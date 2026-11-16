@@ -63,3 +63,67 @@ class TestEvalStillFlags:
         finds = _js("eval(req.body.code)\nconst f = new Function(userInput)\n")
         assert [(f.rule_id, f.line) for f in finds] == [
             ("deser.eval", 1), ("deser.eval", 2)]
+
+
+class TestFunctionCallForm:
+    """Plain ``Function(...)`` calls are the call-shaped twin of new Function."""
+
+    def test_call_form_flags(self):
+        finds = _js("Function(userInput)()\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("deser.eval", "critical")]
+
+    def test_dotted_function_flags(self):
+        finds = _js("window.Function(userInput)(args)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [("deser.eval", 1)]
+
+    def test_static_call_form_is_quiet(self):
+        finds = _js("Function('return 1')()\n")
+        assert finds == []
+
+    def test_unrelated_constructor_call_is_quiet(self):
+        finds = _js("SomeFunction(userInput)\n")
+        assert finds == []
+
+    def test_function_prototype_is_quiet(self):
+        finds = _js("Function.prototype.bind.call(fn)\n")
+        assert finds == []
+
+
+class TestExecSyncFamily:
+    """execSync / spawnSync / fork are the sync children of exec/spawn and
+    carry the same shell-concat injection surface."""
+
+    def test_bare_exec_sync_flags(self):
+        finds = _js("execSync('ls ' + dir)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_dotted_exec_sync_flags(self):
+        finds = _js("child_process.execSync('rm ' + userInput)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_require_exec_sync_flags(self):
+        finds = _js("require('child_process').execSync('rm ' + userInput)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_spawn_sync_flags(self):
+        finds = _js("cp.spawnSync('rm -rf ' + dir)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        finds = _js("execSync('ls -la')\n")
+        assert finds == []
+
+    def test_parameter_list_form_is_quiet(self):
+        # A list of arguments is not a string concat; no injection surface.
+        finds = _js("cp.spawnSync('ls', [dir])\n")
+        assert finds == []
+
+    def test_fork_with_parameter_list_is_quiet(self):
+        finds = _js("require('child_process').fork('worker.js', [dir])\n")
+        assert finds == []
+
