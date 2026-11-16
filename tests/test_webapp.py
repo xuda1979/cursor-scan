@@ -98,6 +98,15 @@ class TestSnapshotPage:
         assert doc["grade"] == "B"
         assert len(doc["findings"]) == 2
 
+    def test_snapshot_json_api_optional_suffix(self, tmp_path):
+        paths = _seed_history(str(tmp_path))
+        fname = paths["after"].rsplit("/", 1)[-1]
+        for ref in (fname, fname + ".json", "proj_new", "proj_new.json"):
+            ver, mime, body = route(str(tmp_path), "/api/snapshot/" + ref)
+            assert ver == 200, f".json suffix on {ref!r} should resolve"
+            assert "application/json" in mime
+            assert json.loads(body.decode("utf-8"))["grade"] == "B"
+
 
 class TestDiffPage:
     def test_diff_reports_score_delta_and_partitions(self, tmp_path):

@@ -111,7 +111,12 @@ def _api_history(history_dir: str) -> Tuple[int, str, bytes]:
 
 
 def _api_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
+    # Accept an optional trailing ".json" (see route docstring). Try the name
+    # verbatim first so a slug/target that legitimately ends in ".json" still
+    # resolves; only fall back to the suffix-stripped form.
     path = _safe_snapshot_path(history_dir, name)
+    if path is None and name.endswith(".json"):
+        path = _safe_snapshot_path(history_dir, name[:-len(".json")])
     if path is None:
         return _json(404, {"error": f"未找到快照: {name!r}"})
     return _json(200, load_snapshot(path))
