@@ -153,6 +153,46 @@ class TestPickleBackedVariants:
         assert finds[0].dimension == "deserialization"
 
 
+class TestShelveAndUnpickler:
+    """shelve.open opens a pickle-backed store (CWE-502) and pickle.Unpickler
+    is the class twin of pickle.load: both execute arbitrary code while
+    reading untrusted data. Serializing twins and constructor variants stay
+    quiet."""
+
+    def test_shelve_open_flags(self):
+        assert _py("db = shelve.open(path)\n") == [("deser.pickle", "critical")]
+
+    def test_shelve_open_writeback_flags(self):
+        assert _py("db = shelve.open(path, writeback=True)\n") == [("deser.pickle", "critical")]
+
+    def test_pickle_unpickler_flags(self):
+        assert _py("up = pickle.Unpickler(fh)\n") == [("deser.pickle", "critical")]
+
+    def test_unpickler_load_flags_on_same_line(self):
+        assert _py("up = pickle.Unpickler(fh); up.load()\n") == [("deser.pickle", "critical")]
+
+    def test__pickle_unpickler_flags(self):
+        # The C-implementation Unpickler shares the execution surface.
+        assert _py("up = _pickle.Unpickler(fh)\n") == [("deser.pickle", "critical")]
+
+    def test_shelve_import_line_is_quiet(self):
+        assert _py("import shelve\n") == []
+
+    def test_pickle_pickler_is_quiet(self):
+        # Serializing out is not a deserialization sink.
+        assert _py("pk = pickle.Pickler(fh)\n") == []
+
+    def test_shelve_class_constructors_are_quiet(self):
+        # Only shelve.open is matched; Shelf/DbfilenameShelf are not opened
+        # from a data stream by this idiom.
+        assert _py("db = shelve.DbfilenameShelf(path)\ndb2 = shelve.Shelf(d)\n") == []
+
+    def test_from_import_unpickler_is_quiet(self):
+        # `from pickle import Unpickler` has no `pickle.Unpickler` dotted
+        # form; the call site is indistinguishable from a local class.
+        assert _py("from pickle import Unpickler\nup = Unpickler(fh)\n") == []
+
+
 class TestNodeVmRun:
     """Node's vm.runIn*Context executes a source string -- the JS counterpart
     of eval. Dynamic source flags as deser.eval; literals and other vm API

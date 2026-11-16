@@ -53,3 +53,12 @@ def load_checkpoint(path: str):
     import torch
     return torch.load(path)
 
+
+def open_session_store(path: str):
+    return shelve.open(path)
+
+
+def unpickle_stream(fh):
+    updater = pickle.Unpickler(fh)
+    return updater.load()
+

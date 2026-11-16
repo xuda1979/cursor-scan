@@ -16,6 +16,15 @@ RE_PICKLE = re.compile(
     r"|(?:cloudpickle|dill)\.(loads?|load)|_pickle\.(loads?|load)|joblib\.load"
     r"|(?:pandas|pd)\.read_pickle|import marshal|marshal\.(loads?))\b"
 )
+# shelve.open(path) opens a pickle-backed database store: records written
+# by shelve round-trip through pickle, so reading an untrusted store
+# executes arbitrary code during unpickling (CWE-502) -- the store
+# counterpart of pickle.load.
+RE_SHELVE_OPEN = re.compile(r"\bshelve\.open\s*\(")
+# pickle.Unpickler(fp) is the class-based twin of pickle.load: constructing
+# it from a file handle (typically followed by .load()) unpickles the data
+# stream with the same arbitrary-code-execution surface.
+RE_UNPICKLER = re.compile(r"\b(?:_?pickle)\.Unpickler\s*\(")
 RE_YAML_UNSAFE = re.compile(
     r"\byaml\.unsafe_load\b"
 )
@@ -54,6 +63,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             if "load" in m.group(1) or "read_pickle" in m.group(1):
                 findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
                                     "pickle 反序列化可执行任意代码", "改用 JSON/安全格式"))
+        if RE_SHELVE_OPEN.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
+                                "shelve.open 打开 pickle 后端存储，读取不可信数据可执行任意代码",
+                                "改用 SQLite/JSON 等安全存储"))
+        if RE_UNPICKLER.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
+                                "pickle.Unpickler 反序列化可执行任意代码",
+                                "改用 JSON/安全格式"))
         if RE_YAML_UNSAFE.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
