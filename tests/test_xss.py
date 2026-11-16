@@ -427,3 +427,68 @@ class TestHtmlBinding:
         found = xss.analyze_code("t.vue", '<div v-html="userBio"></div>\n')
         assert found[0].dimension == "xss"
         assert found[0].fix
+
+
+class TestBypassTrust:
+    """Angular's bypassSecurityTrust* / bypassSanitizationTrust* skip the
+    built-in sanitizer. A dynamic argument is a documented high-severity XSS
+    sink; a plain static literal is inert server-controlled content."""
+
+    def test_dynamic_html_flags(self):
+        found = xss.analyze_code("t.ts",
+                                 "this.sanitizer.bypassSecurityTrustHtml(html);\n")
+        assert [f.rule_id for f in found] == ["xss.bypass_trust"]
+        assert found[0].severity == "high"
+
+    def test_dynamic_resource_url_flags(self):
+        found = xss.analyze_code("t.ts",
+                                 "return this.sanitizer.bypassSecurityTrustResourceUrl(url);\n")
+        assert [f.rule_id for f in found] == ["xss.bypass_trust"]
+
+    def test_sanitization_rename_flags(self):
+        # Angular >= 15 renamed bypassSecurityTrust* to bypassSanitizationTrust*.
+        found = xss.analyze_code("t.ts",
+                                 "this.sanitizer.bypassSanitizationTrustStyle(theme.colors);\n")
+        assert [f.rule_id for f in found] == ["xss.bypass_trust"]
+
+    def test_concat_argument_flags(self):
+        found = xss.analyze_code("t.ts",
+                                 'this.sanitizer.bypassSecurityTrustHtml("<b>" + name + "</b>");\n')
+        assert [f.rule_id for f in found] == ["xss.bypass_trust"]
+
+    def test_interpolated_template_literal_flags(self):
+        found = xss.analyze_code("t.ts",
+                                 'this.sanitizer.bypassSecurityTrustHtml(`<b>${x}</b>`);\n')
+        assert [f.rule_id for f in found] == ["xss.bypass_trust"]
+
+    def test_static_literal_is_quiet(self):
+        assert xss.analyze_code("t.ts",
+                                'this.sanitizer.bypassSecurityTrustHtml("<b>done</b>");\n') == []
+
+    def test_static_single_quoted_embedded_quotes_is_quiet(self):
+        # HTML strings frequently embed the opposite quote kind; still static.
+        assert xss.analyze_code("t.ts",
+                                "this.sanitizer.bypassSecurityTrustHtml('<p class=\"muted\">by app</p>');\n") == []
+
+    def test_static_template_literal_is_quiet(self):
+        assert xss.analyze_code("t.ts",
+                                'this.sanitizer.bypassSecurityTrustHtml(`<b>hi</b>`);\n') == []
+
+    def test_method_reference_is_quiet(self):
+        # Taking the method reference without calling it is not a sink
+        # (matches the el.onload = fn function-reference philosophy).
+        assert xss.analyze_code("t.ts",
+                                "const s = this.sanitizer.bypassSecurityTrustHtml;\n") == []
+
+    def test_import_lines_skipped(self):
+        assert xss.analyze_code("t.ts",
+                                "import { DomSanitizer } from '@angular/platform-browser';\n") == []
+
+    def test_finding_carries_dimension_and_fix(self):
+        found = xss.analyze_code("t.ts",
+                                 "el.innerHTML = this.sanitizer.bypassSecurityTrustHtml(userHtml);\n")
+        ids = [f.rule_id for f in found]
+        assert "xss.bypass_trust" in ids  # dom_manipulation also legitimately fires
+        bt = next(f for f in found if f.rule_id == "xss.bypass_trust")
+        assert bt.dimension == "xss"
+        assert bt.fix

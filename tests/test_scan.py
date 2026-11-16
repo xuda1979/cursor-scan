@@ -37,6 +37,7 @@ BAD_EXPECTED = [
     ("xss.py", {"xss.template_render", "xss.mark_safe"}),
     ("xss_app.svelte", {"xss.svelte_html"}),
     ("xss_app.vue", {"xss.html_binding"}),
+    ("xss_component.ts", {"xss.html_binding", "xss.bypass_trust"}),
     ("xss.js", {"xss.dom_manipulation", "xss.dangerous_react", "xss.document_write",
                 "xss.script_src_injection", "xss.event_handler_attr"}),
 ]

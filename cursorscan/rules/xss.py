@@ -61,9 +61,12 @@ RE_LOCATION_NAV = re.compile(
     re.I,
 )
 # A right-hand side that is provably static: a plain string literal, or a
-# template literal with no interpolation.
+# template literal with no interpolation.  Each quoted form allows embedded
+# quotes of the *opposite* kind (TS/JS HTML strings like
+# ``'<p class="x">...</p>'`` are still static content); concatenation and
+# interpolation both fail the trailing ``[;)]?$`` anchor.
 _STATIC_RHS = re.compile(
-    r"""^["'][^"'+\n]*["']\s*[;)]?$"""          # "static" / 'static'
+    r"""^(?:'[^'\n]*'|"[^"\n]*")[;)]?$"""       # "static" / 'static'
     r"""|^`(?:[^`$]|\$(?!\{))*`\s*[;)]?$""",    # `static` (no ${...})
     re.VERBOSE,
 )
@@ -152,6 +155,14 @@ RE_HTML_BINDING = re.compile(
     r"""|\[(?:inner|outer)HTML\]\s*=\s*["']([^"']+)["']"""
     r"""|:innerHTML\s*=\s*["']([^"']+)["']""",
     re.I,
+)
+
+# Angular's sanitizer bypasses: the framework counterpart of mark_safe. Using
+# them on anything but a static footer is a documented XSS sink; newer Angular
+# (>= 15) renames bypassSecurityTrust* to bypassSanitizationTrust*. A plain
+# string-literal argument is inert static content.
+RE_BYPASS_TRUST = re.compile(
+    r"""\.(?:bypassSecurityTrust|bypassSanitizationTrust)\w*\s*\(""",
 )
 
 
@@ -272,4 +283,18 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                                     "v-html / [innerHTML] 绑定将未转义 HTML 写入 DOM，"
                                     "用户输入可触发 XSS",
                                     "对绑定值做 HTML 转义，或使用普通插值 {{ expr }}"))
+        # Angular sanitizer bypasses: trustHtml/RSS/style/script/sanitizer
+        # mark untrusted data as safe; only a plain static literal is inert.
+        if RE_BYPASS_TRUST.search(line):
+            arg = line.split("(", 1)[1] if "(" in line else ""
+            # TS statements commonly end with a semicolon; drop it and any
+            # trailing whitespace so ``("...");`` still reads as a literal.
+            arg = arg.strip().rstrip(";")
+            if not _static_literal_arg(arg):
+                findings.append(hit(lineno, "xss.bypass_trust", "Angular 绕过消毒器",
+                                    "bypassSecurityTrust* 将数据标记为安全，绕过 Angular"
+                                    "内建 XSS 消毒",
+                                    "不使用 bypass API；对用户输入做独立消毒并仅使用"
+                                    "内插/属性绑定渲染",
+                                    severity="high"))
     return findings
