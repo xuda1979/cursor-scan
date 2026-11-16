@@ -19,9 +19,10 @@ from .helpers import code_lines
 # Property assignments / calls that write raw HTML into the DOM.  jQuery's
 # ``.html(arg)`` is an innerHTML setter and a documented DOM-XSS sink, so it
 # belongs here too; the empty-argument ``.html()`` getter form (a read) and
-# ``.innerHTML`` reads are left alone.
+# ``.innerHTML`` reads are left alone.  Compound ``+=`` writes are sinks as
+# well; a bare ``+`` (``a.innerHTML + b`` is a read) stays quiet.
 RE_DOM_SINK = re.compile(
-    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]"
+    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*(?:\+=|[=(.])"
     r"|\.html\s*\(\s*[^)]",
     re.I,
 )
@@ -54,7 +55,7 @@ RE_AUTOESCAPE_OFF = re.compile(
 # variable / concatenated / interpolated target is an open-redirect candidate
 # when the URL is attacker-influenced (CWE-601).
 RE_LOCATION_NAV = re.compile(
-    r"\blocation\.(?:href\s*=|assign\s*\(|replace\s*\()", re.I,
+    r"\blocation\.(?:href\s*\+?=|assign\s*\(|replace\s*\()", re.I,
 )
 # A right-hand side that is provably static: a plain string literal, or a
 # template literal with no interpolation.

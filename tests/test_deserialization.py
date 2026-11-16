@@ -45,6 +45,13 @@ class TestPickleFormsStillFlag:
     def test_cpickle_load_flags(self):
         assert _py("x = cPickle.load(data)\n") == [("deser.pickle", "critical")]
 
+    def test_cloudpickle_loads_flags(self):
+        # cloudpickle is a pickle-family loader with the same execution surface.
+        assert _py("obj = cloudpickle.loads(payload)\n") == [("deser.pickle", "critical")]
+
+    def test_dill_load_flags(self):
+        assert _py("obj = dill.load(data)\n") == [("deser.pickle", "critical")]
+
     def test_finding_carries_dimension_and_fix(self):
         found = analyze_code("x.py", "jsonpickle.loads(payload)\n")
         assert found[0].dimension == "deserialization"

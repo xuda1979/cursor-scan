@@ -37,6 +37,15 @@ class TestDomSink:
         # Reading the property back must not be treated as a sink.
         assert _analyze("const x = banner.innerHTML;\n") == []
 
+    def test_inner_html_compound_assignment_is_a_write(self):
+        # `+=` appends raw HTML; the same DOM-XSS sink as `=`.
+        found = _analyze("banner.innerHTML += userHtml;\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_inner_html_plus_read_is_not_a_write(self):
+        # A bare `+` reads the current value into a larger expression.
+        assert _analyze("const s = a.innerHTML + b;\n") == []
+
     def test_jquery_html_setter_is_a_sink(self):
         # jQuery's .html() is an innerHTML setter; a DOM-XSS sink.
         found = _analyze("$('#box').html(userInput);\n")
@@ -92,6 +101,11 @@ class TestOpenRedirect:
 
     def test_location_href_concat_flags(self):
         found = _analyze("location.href = '/go?next=' + req.query.next;\n")
+        assert [f.rule_id for f in found] == ["xss.open_redirect"]
+
+    def test_location_href_compound_assignment_flags(self):
+        # `+=` appends to the current location dynamically.
+        found = _analyze("location.href += token;\n")
         assert [f.rule_id for f in found] == ["xss.open_redirect"]
 
     def test_location_assign_flags(self):
