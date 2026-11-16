@@ -352,6 +352,16 @@ def analyze_jsts(path, src, findings):
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
                     f"使用 MD5/SHA1 哈希: {args}", "改用 sha256", "crypto"))
 
+        # Public JS weak-digest libraries carry the algorithm in the function
+        # name itself: CryptoJS.SHA1/MD5, forge md5/sha1, bare md5()/sha1()
+        # helpers. The regex fallback demands a `Crypto.Hash.` style prefix
+        # (CryptoJS is not matched) and is case-sensitive for `sha1`, so these
+        # would otherwise slip through.
+        if fn.endswith((".MD5", ".SHA1", ".md5", ".sha1")) or fn in ("md5", "sha1"):
+            findings.append(_ev(
+                "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                f"使用弱哈希: {fn}()", "改用 sha256 (crypto.createHash)", "crypto"))
+
         # node crypto cipher with ECB
         if "ECB" in args or "CipherMode.ECB" in args:
             findings.append(_ev(

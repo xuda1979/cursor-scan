@@ -100,6 +100,57 @@ class TestCreateHmacStaticArgs:
         assert finds == []
 
 
+class TestNamedWeakDigestHelpers:
+    """Public JS weak-hash libraries name the algorithm in the call itself:
+    CryptoJS.SHA1/MD5, node-forge md5/sha1, and bare md5()/sha1() helpers.
+    None of those match the Crypto.Hash-prefixed regex fallback."""
+
+    def test_cryptojs_md5_flags(self):
+        finds = _js("const h = CryptoJS.MD5(payload)\n")
+        assert [(f.rule_id, f.line) for f in finds] == \
+            [("crypto.md5_or_sha1", 1)]
+
+    def test_cryptojs_sha1_flags(self):
+        finds = _js("const h = CryptoJS.SHA1(data)\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_bare_md5_flags(self):
+        finds = _js("const h = md5(text)\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_bare_sha1_flags(self):
+        finds = _js("const h = sha1(input)\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_forge_md5_flags(self):
+        finds = _js("const h = forge.md5(data)\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_flagged_finding_carries_metadata(self):
+        finds = _js("CryptoJS.MD5(payload)\n")
+        assert finds[0].dimension == "crypto"
+        assert finds[0].severity == "high"
+        assert "sha256" in finds[0].fix
+
+    def test_sha256_family_is_quiet(self):
+        finds = _js("const a = CryptoJS.SHA256(x)\n"
+                    "const b = CryptoJS.HmacSHA256(secret, msg)\n"
+                    "const c = CryptoJS.SHA3(y)\n"
+                    "const d = sha256(z)\n")
+        assert finds == []
+
+    def test_object_members_named_md5_not_calls_stay_quiet(self):
+        # Reading a field like CryptoJS.lib object access is not a weak hash.
+        finds = _js("console.log(CryptoJS.lib.WordArray)\n")
+        assert finds == []
+
+    def test_pbkdf2_sha1_prf_is_quiet(self):
+        # PBKDF2 using SHA-1 as an HMAC PRF is not a collision-prone direct
+        # hash and predates no detection; do not regress it.
+        finds = _js('crypto.pbkdf2Sync("x", salt, 10000, 64, "sha1")\n')
+        assert finds == []
+
+
 class TestE2EFixtureLock:
     def test_bad_fixture_crypto_rules_still_fire(self, scan_bad_dir):
         from cursorscan.scan import scan_project
