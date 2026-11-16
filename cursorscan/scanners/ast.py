@@ -342,14 +342,13 @@ def analyze_jsts(path, src, findings):
         args = args_text(call, src)
         line = _line_for(call)
 
-        # crypto.createHash('md5') / 'sha1'
+        # crypto.createHash('md5') / `sha1` / "md5" (any quoted static arg)
         if fn.endswith(".createHash") or fn == "createHash":
-            if any(a in args for a in ("'md5'", '"md5"', "'sha1'", '"sha1"')):
+            algo_match = _js_static_string_arg(args)
+            if algo_match is not None and algo_match.lower() in ("md5", "sha1"):
                 findings.append(_ev(
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
                     f"使用 MD5/SHA1 哈希: {args}", "改用 sha256", "crypto"))
-            elif any(a in args for a in ("'sha256'", '"sha256"', "'sha512'", '"sha512"')):
-                pass
 
         # node crypto cipher with ECB
         if "ECB" in args or "CipherMode.ECB" in args:
@@ -419,3 +418,22 @@ def _js_external(args: str) -> bool:
     low = args.lower()
     return any(x in low for x in ("req.", "request.", "query.", "body.", "ctx.",
                                   "process.env", "input", "form", "url."))
+
+
+_JS_STATIC_STRING = re.compile(r"^[`\"']([A-Za-z0-9_.\-]+)[`\"']$")
+
+
+def _js_static_string_arg(args: str) -> str | None:
+    """Return the value of a static first string argument of a JS call.
+
+    ``args`` is the raw source text of the ``arguments`` node, which includes
+    the wrapping parentheses (``("md5")``). Any single quoted -- single-quote,
+    double-quote or backtick -- literal counts as static, so a template like
+    ``(`sha1`)`` is recognised; identifiers, concatenations and interpolated
+    templates return ``None`` (dynamic, unverifiable).
+    """
+    inner = args.strip()
+    if not (inner.startswith("(") and inner.endswith(")")):
+        return None
+    m = _JS_STATIC_STRING.match(inner[1:-1].strip())
+    return m.group(1) if m else None
