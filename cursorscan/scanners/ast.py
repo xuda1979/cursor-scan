@@ -79,6 +79,30 @@ def collect_calls(root, src: str):
         stack.extend(node.children)
 
 
+def collect_new_expressions(root):
+    """Yield every ``new_expression`` node (JS ``new Foo(...)``).
+
+    tree-sitter models ``new Function(body)`` as a ``new_expression`` with a
+    ``constructor`` field, never as a ``call_expression``, so ``collect_calls``
+    cannot see it -- ``Function`` is the constructor-equivalent of ``eval`` and
+    must be inspected on its own pass.
+    """
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "new_expression":
+            yield node
+        stack.extend(node.children)
+
+
+def new_expression_name(node, src: str) -> str:
+    """Textual constructor name of a ``new_expression``, e.g. ``Function``."""
+    ctor = node.child_by_field_name("constructor")
+    if ctor is None:
+        return ""
+    return src[ctor.start_byte:ctor.end_byte]
+
+
 def call_fn_name(node, src: str) -> str:
     """Return textual form of call function, e.g. 'hashlib.md5', 'yaml.load'."""
     fn = node.child_by_field_name("function")
@@ -414,7 +438,7 @@ def analyze_jsts(path, src, findings):
         # hardcoded seed (Math.random / crypto not seedable in JS; skip)
 
         # unsafe deserialization: eval( on external
-        if fn in ("eval", "new Function"):
+        if fn == "eval":
             if _js_external(args):
                 findings.append(_ev(
                     "deser.eval", "eval 外部输入", "critical", path, line,
@@ -454,6 +478,21 @@ def analyze_jsts(path, src, findings):
                 findings.append(_ev(
                     "perms.tmp_write_insecure", "不安全 /tmp 写入", "medium", path, line,
                     "直接写 /tmp 易受符号链接攻击", "使用 os.tmpdir()+mkstemp 私有文件", "permissions"))
+
+    # new Function(...) parses as a ``new_expression``, which ``collect_calls``
+    # never yields (the dead-code trap that hid this from detection).  Only the
+    # Function constructor can execute a string body at runtime, so scan those
+    # nodes on their own pass.
+    for new_expr in collect_new_expressions(root):
+        ctor = new_expression_name(new_expr, src)
+        if ctor != "Function":
+            continue
+        body = args_text(new_expr, src)
+        if not _js_external(body):
+            continue
+        findings.append(_ev(
+            "deser.eval", "eval 外部输入", "critical", path, _line_for(new_expr),
+            f"new Function 处理外部输入: {body}", "重构，不使用 Function 构造器", "deserialization"))
 
 
 def _fn_is_db_query(fn: str) -> bool:
