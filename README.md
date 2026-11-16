@@ -42,6 +42,7 @@ cursor-scan <项目目录>          # 文本报告
 cursor-scan . --format json    # JSON
 cursor-scan . --format sarif   # SARIF 2.1.0
 cursor-scan . --fail-on medium # 有任何 medium+ 发现即 exit 1
+cursor-scan --serve            # 启动离线 Web 仪表板 (http://127.0.0.1:8080/)
 ```
 
 | 参数 | 说明 | 默认 |
@@ -54,6 +55,8 @@ cursor-scan . --fail-on medium # 有任何 medium+ 发现即 exit 1
 | `--no-save` | 不写入历史快照 | |
 | `--history` | 列出已保存的扫描快照（最新在前） | |
 | `--diff` | 比较两张快照，如 `--diff <before> <after>`（目标 slug 或文件路径） | |
+| `--serve` | 启动离线 Web 仪表板，浏览历史 / 快照 / 差异 | |
+| `--host` / `--port` | 仪表板监听地址 / 端口 | `127.0.0.1` / `8080` |
 | `--version` | 打印版本 | |
 
 退出码：`0` 完成且无达到门禁的发现；`1` 有达到门禁的发现；`2` 用法/环境错误（如目录不存在、无权限）。
@@ -70,6 +73,22 @@ cursor-scan --diff proj-20261115-101000.json proj-20261115-102000.json  # 两次
 
 `--diff` 按 `(rule_id, file, line)` 对齐两次扫描，列出新增 / 修复 / 仍在的问题，并给出
 评分与等级的变化。快照是纯 JSON（`result_to_dict` 结构），可被离线仪表板直接读取。
+
+## Web 仪表板（离线）
+
+`cursor-scan --serve` 启动一个零依赖的本地 Web 仪表板（纯 Python `http.server`，
+无网络、无 GPU），浏览全部扫描历史：
+
+```bash
+cursor-scan .                    # 生成/刷新快照
+cursor-scan --serve              # http://127.0.0.1:8080/
+cursor-scan --serve --port 9000  # 自定义端口
+```
+
+页面：历史列表（最新在前，含评分/等级）、单个快照详情（评分卡 + 逐项证据 +
+代码片段）、双快照对比（`/diff?before=<ref>&after=<ref>`，新增 / 修复 / 仍在）。
+另有 JSON API：`/api/history.json`、`/api/snapshot/<ref>`。仪表板只读历史目录，
+快照引用经路径校验（拒绝目录穿越），所有扫描内容 HTML 转义（防存储型 XSS）。
 
 ## 评分模型
 
@@ -99,7 +118,7 @@ python -m pytest tests/ -q   # 全量测试
 | 3. 评分卡 + 逐项证据 | ✅ |
 | 4. 历史快照 + diff | ✅ |
 | 5. CLI 门禁 + SARIF | ✅ |
-| 6. Web dashboard | ⏳ P2 |
+| 6. Web dashboard | ✅ 离线（stdlib，无依赖） |
 | 7. 测试 + README | ✅ |
 
 ## 路线图
@@ -107,5 +126,5 @@ python -m pytest tests/ -q   # 全量测试
 - [x] P0 规则引擎 + 评分卡
 - [x] P1 CLI + SARIF + 门禁
 - [x] P2a 扫描历史快照 + diff（CLI）
-- [ ] P2b Web dashboard（读取历史快照）
+- [x] P2b Web dashboard（读取历史快照）
 - [x] P3 依赖风险 flag（requirements.txt / package.json 高危已知库）

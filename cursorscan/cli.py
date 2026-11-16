@@ -63,6 +63,12 @@ def _arg_parser() -> argparse.ArgumentParser:
         "--diff", nargs=2, metavar=("BEFORE", "AFTER"),
         help="compare two saved snapshots (target slug or file path)",
     )
+    p.add_argument(
+        "--serve", action="store_true",
+        help="serve the offline web dashboard over scanning history",
+    )
+    p.add_argument("--host", default="127.0.0.1", help="dashboard bind host")
+    p.add_argument("--port", type=int, default=8080, help="dashboard bind port")
     p.add_argument("--version", action="version", version=f"cursor-scan {__version__}")
     return p
 
@@ -78,6 +84,8 @@ def main(argv: List[str] | None = None) -> int:
 
     if args.history:
         return _cmd_history(args.history_dir)
+    if args.serve:
+        return _cmd_serve(args.history_dir, args.host, args.port)
     if args.diff:
         try:
             before = load_snapshot(resolve_snapshot(args.diff[0], args.history_dir))
@@ -130,6 +138,18 @@ def _cmd_history(history_dir: Optional[str]) -> int:
         print(f"  {e.describe()}")
     print("\n比较: cursor-scan --diff <before> <after>")
     return 0
+
+
+def _cmd_serve(history_dir: Optional[str], host: str, port: int) -> int:
+    from .history import default_history_dir
+    from .webapp import run_dashboard
+    hd = history_dir or default_history_dir()
+    try:
+        return run_dashboard(hd, host=host, port=port)
+    except OSError as exc:
+        print(f"cursor-scan: 无法启动仪表板 ({host}:{port}): {exc}",
+              file=sys.stderr)
+        return 2
 
 
 def print_diff(diff) -> None:
