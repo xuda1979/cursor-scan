@@ -96,14 +96,14 @@ def bad_copy(tmp_path):
 
 
 class TestIgnoreIntegration:
-    """scan_bad yields 39 findings; sql_concat x2, crypto.* x7."""
+    """scan_bad yields 48 findings; sql_concat x2, crypto.* x7, xss medium x3."""
 
     def test_cli_ignore_reduces_findings(self, bad_copy, capsys):
         rc = main([bad_copy, "--no-save", "--ignore", "injection.sql_concat",
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1  # high/critical findings remain, --fail-on high gate holds
-        assert "发现 37 个问题" in out  # 39 - 2 suppressed
+        assert "发现 46 个问题" in out  # 48 - 2 suppressed
         assert "已忽略 2 个发现" in out
 
     def test_glob_ignore_suppresses_rule_family(self, bad_copy, capsys):
@@ -111,7 +111,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "发现 32 个问题" in out
+        assert "发现 41 个问题" in out
         assert "已忽略 7 个发现" in out
 
     def test_rule_file_line_form(self, bad_copy, capsys):
@@ -172,7 +172,7 @@ class TestIgnoreIntegration:
             json.dump({"ignore": ["crypto.*"]}, fh)
         main([bad_copy, "--no-save", "--format", "json", "--history-dir", "unused"])
         doc = json.loads(capsys.readouterr().out)
-        assert doc["score"] > 17  # clean result scores 17 with all 39 findings
+        assert doc["score"] > 17  # suppressing 7 crypto.* findings raises the score to 27
 
     def test_saved_snapshot_carries_suppressed(self, bad_copy, tmp_path, capsys):
         # Snapshots (history/dashboard input) must round-trip suppressed

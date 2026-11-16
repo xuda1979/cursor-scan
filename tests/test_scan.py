@@ -30,6 +30,8 @@ BAD_EXPECTED = [
                         "crypto.fixed_iv", "crypto.hardcoded_seed"}),
     ("requirements.txt", {"deps.known_vulnerable"}),
     ("package.json", {"deps.known_vulnerable"}),
+    ("xss.py", {"xss.template_render"}),
+    ("xss.js", {"xss.dom_manipulation", "xss.dangerous_react", "xss.document_write"}),
 ]
 
 

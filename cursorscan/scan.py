@@ -20,7 +20,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from .ignore import IgnorePattern, compile_ignores
 from .models import Evidence, ScanResult, Scorecard
 from .rules import (access_control, crypto, deps, deserialization, injection,
-                    permissions, secrets)
+                    permissions, secrets, xss)
 from .scanners import ast as ast_scanners
 
 # Directories always skipped, regardless of ignore files.
@@ -146,6 +146,7 @@ def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
         findings.extend(runner.analyze_code(path_of(root, rel), src))
     findings.extend(secrets.analyze_code(path_of(root, rel), src))
     findings.extend(deps.analyze_code(path_of(root, rel), src))
+    findings.extend(xss.analyze_code(path_of(root, rel), src))
 
 
 def path_of(root: str, rel: str) -> str:

@@ -9,7 +9,7 @@
 
 ## 功能
 
-- **规则维度**（7 个）：
+- **规则维度**（8 个）：
   - 弱密码学（crypto）：md5/sha1 弱哈希、DES、ECB 模式、固定 IV、硬编码随机种子
   - 硬编码秘密（secrets）：AWS key、Slack/GitHub/Google/Stripe token、私钥块、通用 `key = 值` 可疑赋值
   - 不安全反序列化（deserialization）：pickle、不安全 `yaml.load`、`eval`/`exec` 外部输入
@@ -17,6 +17,7 @@
   - 文件权限（permissions）：`chmod 0777`、写入 /tmp 无校验
   - 访问控制（access_control）：缺鉴权路由等
   - 依赖风险（dependencies）：`requirements*.txt` / `package.json` 中的已知漏洞版本（离线 CVE 表）与未固定版本
+  - 跨站脚本（xss）：`innerHTML` / `insertAdjacentHTML` / `outerHTML` DOM 写入、React `dangerouslySetInnerHTML`、`document.write`、Jinja `render_template_string` / `Markup` / `|safe` 关闭转义
 - **评分卡**：每维度从 100 起，按严重度扣分（low 5 / medium 12 / high 20 / critical 30），
   总分 = 各维度均分；等级 A≥90, B≥75, C≥60, D≥40, F<40。每项发现都给出
   `file:line`、严重度、解释与修复建议，保证可解释。
@@ -131,15 +132,15 @@ python -m pytest tests/ -q   # 全量测试
 
 `fixtures/` 下有两棵树用于验收测试：
 
-- `fixtures/scan_bad/`：故意植入漏洞的七个文件（弱密码学 / 秘密 / 反序列化 / 注入 / 权限 / 依赖清单），
-  共 23 条期望规则 ID，检测率须 ≥ 90%。
+- `fixtures/scan_bad/`：故意植入漏洞的九个文件（弱密码学 / 秘密 / 反序列化 / 注入 / 权限 / 依赖清单
+  / 跨站脚本），共 27 条期望规则 ID，检测率须 ≥ 90%。
 - `fixtures/scan_good/`：干净项目，须零误报（0 findings、100 / A）。
 
 验收标准（SPEC AC1–AC7）：
 
 | AC | 状态 |
 | --- | --- |
-| 1. scan_bad 检测率 ≥ 90% | ✅ 21/21 → 23/23（100%） |
+| 1. scan_bad 检测率 ≥ 90% | ✅ 27/27（100%） |
 | 2. scan_good 零误报 | ✅ 0 findings / 100 / A |
 | 3. 评分卡 + 逐项证据 | ✅ |
 | 4. 历史快照 + diff | ✅ |
@@ -154,3 +155,4 @@ python -m pytest tests/ -q   # 全量测试
 - [x] P2a 扫描历史快照 + diff（CLI）
 - [x] P2b Web dashboard（读取历史快照）
 - [x] P3 依赖风险 flag（requirements.txt / package.json 高危已知库）
+- [x] P4 XSS 检测维度（DOM sinks / React / document.write / 模板渲染）

@@ -17,6 +17,7 @@ DIMENSIONS = [
     "permissions",
     "access_control",
     "dependencies",
+    "xss",
 ]
 
 DIMENSION_LABELS = {
@@ -27,6 +28,7 @@ DIMENSION_LABELS = {
     "permissions": "文件权限",
     "access_control": "访问控制",
     "dependencies": "依赖风险",
+    "xss": "跨站脚本 (XSS)",
 }
 
 
