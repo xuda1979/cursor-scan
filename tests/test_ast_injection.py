@@ -9,6 +9,7 @@ direct-call interpolation forms and assert safe parameterized calls stay clean.
 
 from __future__ import annotations
 
+from cursorscan.rules.injection import analyze_code as analyze_injection
 from cursorscan.scanners.ast import analyze_jsts, analyze_python
 
 
@@ -22,6 +23,10 @@ def _js(code: str):
     finds = []
     analyze_jsts("x.js", code, finds)
     return finds
+
+
+def _js_regex(code: str):
+    return [(f.rule_id, f.line) for f in analyze_injection("x.js", code)]
 
 
 class TestPythonFstringConcat:
@@ -73,6 +78,47 @@ class TestJSTemplateLiteralConcat:
     def test_constant_template_literal_clean(self):
         finds = _js("db.query(`SELECT * FROM users WHERE id = ?`);\n")
         assert finds == []
+
+
+class TestJSCrossLineSqlConcat:
+    """JS `const q = 'SELECT ...' + input` built on one line and handed to a
+    DB driver on a later line.  The AST call-walker only sees the bare
+    identifier ``q`` at ``db.run(q)``, and the line-scanner never sees the
+    tainted assignment -- so the assignment itself is the detection point
+    (regex fallback, same as the Python RE_SQL_FSTRING_ASSIGN form)."""
+
+    def _reg(self, code: str):
+        return _js_regex(code)
+
+    def test_concat_assignment_flags(self):
+        found = analyze_injection(
+            "x.js", "const q = 'SELECT * FROM users WHERE id = ' + req.query.id;\n")
+        assert [(f.rule_id, f.severity) for f in found] == [
+            ("injection.sql_concat", "critical")]
+
+    def test_concat_assignment_let_flags(self):
+        assert self._reg("let q = 'SELECT * FROM users WHERE id = ' + user_id;\n") == [
+            ("injection.sql_concat", 1)]
+
+    def test_template_assignment_flags(self):
+        assert self._reg("const q = `SELECT * FROM orders WHERE total > ${amount}`;\n") == [
+            ("injection.sql_concat", 1)]
+
+    def test_static_assignment_is_quiet(self):
+        # No concatenation; a constant query string.
+        assert self._reg("const q = 'SELECT * FROM users ORDER BY id';\n") == []
+
+    def test_no_sql_keyword_is_quiet(self):
+        assert self._reg("const msg = 'hello ' + name;\n") == []
+
+    def test_object_literal_assignment_is_quiet(self):
+        # A JS object body is not a SQL string concat.
+        assert self._reg("const data = { op: 'SELECT', source: x } + obj;\n") == []
+
+    def test_single_line_db_run_still_flags(self):
+        # The direct-call form must keep working alongside the new pass.
+        assert self._reg("db.run('SELECT * FROM users WHERE id = ' + req.query.id);\n") == [
+            ("injection.sql_concat", 1)]
 
 
 class TestE2EFixtureLock:
