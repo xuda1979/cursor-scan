@@ -133,6 +133,19 @@ def analyze_python(path, src, findings):
                 findings.append(_ev(
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
                     f"调用弱哈希 {fn}", "改用 sha256 (hashlib.sha256)", "crypto"))
+        if fn in ("hmac.new", "hmac.HMAC"):
+            digest = None
+            kw = _find_kw_literal(call, src, ("digestmod",))
+            if kw is not None:
+                digest = _py_static_string(kw[0])  # digestmod="md5"
+            else:
+                pos = _py_positional_args(call, src)
+                if len(pos) >= 3:
+                    digest = _py_static_string(pos[2])  # hmac.new(key, msg, "md5")
+            if digest is not None and digest.lower() in ("md5", "sha1"):
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                    f"HMAC 使用弱摘要 {digest}: {fn}({args})", "改用 sha256 摘要", "crypto"))
 
         # ------ weak cipher / mode ------
         if fn in ("AES.new", "AES", "DES.new", "DES3.new", "DES", "TripleDES.new",
@@ -223,6 +236,30 @@ def analyze_python(path, src, findings):
                 findings.append(_ev(
                     "perms.world_writable_dir", "世界可写目录", "high", path, line,
                     f"目录创建权限 {mode} 世界可写", "使用 0o700", "permissions"))
+
+
+_PY_STATIC_STRING = re.compile(r'^(["\'])(.*?)\1$', re.S)
+
+
+def _py_static_string(txt: str) -> str | None:
+    """Value of a static quoted Python string literal; ``None`` otherwise.
+
+    ``None`` covers identifiers, attribute access (``hashlib.md5``), prefix
+    strings (``f"..."``, ``b"..."``) and concatenations -- all either
+    unverifiable statically or handled by the regex fallback.
+    """
+    m = _PY_STATIC_STRING.match(txt.strip())
+    return m.group(2) if m else None
+
+
+def _py_positional_args(call, src):
+    """Source texts of the positional (non-keyword) named arguments."""
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return []
+    return [src[a.start_byte:a.end_byte]
+            for a in args.named_children
+            if a.type not in ("keyword_argument", "keyed_element", "list_splat", "dictionary_splat")]
 
 
 def _find_kw_literal(call, src, names):

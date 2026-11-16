@@ -24,6 +24,16 @@ def new_weak_hasher():
     return hashlib.new("md5")
 
 
+def hmac_md5(data: bytes, key: bytes) -> bytes:
+    import hmac
+    return hmac.new(key, data, "md5").digest()
+
+
+def hmac_sha1(data: bytes, key: bytes) -> bytes:
+    import hmac
+    return hmac.HMAC(key, data, "sha1").digest()
+
+
 def encrypt_des(data: bytes, key: bytes) -> bytes:
     cipher = DES.new(key, DES.MODE_ECB)
     return cipher.encrypt(data)

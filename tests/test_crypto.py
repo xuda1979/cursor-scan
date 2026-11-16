@@ -9,12 +9,18 @@ stay quiet (they are unverifiable, not provably safe).
 
 from __future__ import annotations
 
-from cursorscan.scanners.ast import analyze_jsts
+from cursorscan.scanners.ast import analyze_jsts, analyze_python
 
 
 def _js(code: str):
     finds = []
     analyze_jsts("x.js", code, finds)
+    return finds
+
+
+def _py(code: str):
+    finds = []
+    analyze_python("x.py", code, finds)
     return finds
 
 
@@ -149,6 +155,62 @@ class TestNamedWeakDigestHelpers:
         # hash and predates no detection; do not regress it.
         finds = _js('crypto.pbkdf2Sync("x", salt, 10000, 64, "sha1")\n')
         assert finds == []
+
+
+class TestPythonHmacDigestArgs:
+    """Python ``hmac.new`` / ``hmac.HMAC`` pass the digest as a plain string
+    (``"md5"`` / ``"sha1"``), which the regex fallback (hashlib.* references
+    only) does not see. The digest is positional-or-keyword in the same way
+    the JS createHmac branch treats its first argument."""
+
+    def test_positional_md5_flags(self):
+        finds = _py('import hmac\nhmac.new(key, msg, "md5")\n')
+        assert [(f.rule_id, f.line) for f in finds] == \
+            [("crypto.md5_or_sha1", 2)]
+
+    def test_positional_single_quoted_sha1_flags(self):
+        finds = _py("import hmac\nhmac.new(key, msg, 'sha1')\n")
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_digestmod_keyword_flags(self):
+        finds = _py('import hmac\nhmac.new(key=key, msg=msg, digestmod="md5")\n')
+        assert [(f.rule_id, f.line) for f in finds] == \
+            [("crypto.md5_or_sha1", 2)]
+
+    def test_hmac_class_form_flags(self):
+        finds = _py('import hmac\nhmac.HMAC(key, msg, "sha1")\n')
+        assert [(f.rule_id, f.line) for f in finds] == \
+            [("crypto.md5_or_sha1", 2)]
+
+    def test_keyword_three_positional_order_still_flags(self):
+        # Keyword args appear before positional in the argument_list node;
+        # only the *third positional* (or the digestmod keyword) is checked.
+        finds = _py('import hmac\nhmac.new(key, msg, digestmod="sha1")\n')
+        assert [f.rule_id for f in finds] == ["crypto.md5_or_sha1"]
+
+    def test_sha256_digest_quiet(self):
+        finds = _py('import hmac\nhmac.new(key, msg, "sha256")\n')
+        assert finds == []
+
+    def test_none_digest_quiet(self):
+        # The default digest is the library choice; not provably weak.
+        finds = _py("import hmac\nhmac.new(key, msg)\n")
+        assert finds == []
+
+    def test_dynamic_digest_quiet(self):
+        finds = _py("import hmac\nhmac.new(key, msg, digestmod=chosen)\n")
+        assert finds == []
+
+    def test_md5_as_key_data_not_digest_quiet(self):
+        # The digest is the third positional argument, not the key.
+        finds = _py('import hmac\nhmac.new("md5-key", msg, "sha256")\n')
+        assert finds == []
+
+    def test_flagged_finding_carries_fix(self):
+        finds = _py('import hmac\nhmac.new(key, msg, "md5")\n')
+        assert finds[0].dimension == "crypto"
+        assert finds[0].severity == "high"
+        assert "sha256" in finds[0].fix
 
 
 class TestE2EFixtureLock:
