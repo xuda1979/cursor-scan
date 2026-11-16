@@ -145,6 +145,24 @@ class TestDiffPage:
                              {"before": "proj_old"})
         assert status == 404
 
+    def test_diff_labels_suppressed_as_ignored(self, tmp_path):
+        # "released" was active in before, suppressed in after: the diff must
+        # report it under 忽略 (ignored), never as a fix.
+        before = _result(score=60, grade="C", target="/tmp/proj_old", findings=[
+            _finding("secrets.hardcoded", "app.py", 10),  # stays suppressed
+        ])
+        after = _result(score=70, grade="C", target="/tmp/proj_new")
+        after.suppressed = [_finding("secrets.hardcoded", "app.py", 10)]
+        save_snapshot(before, str(tmp_path))
+        save_snapshot(after, str(tmp_path))
+        status, _, body = route(str(tmp_path), "/diff",
+                                {"before": "proj_old", "after": "proj_new"})
+        html = body.decode("utf-8")
+        assert status == 200
+        assert "忽略" in html          # partition label
+        assert "secrets.hardcoded" in html
+        assert "前一次扫描中被抑制" in html or "忽略（" in html
+
 
 class TestSecurity:
     def test_path_traversal_rejected(self, tmp_path):

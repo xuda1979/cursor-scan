@@ -168,8 +168,11 @@ def print_diff(diff) -> None:
           f"({sign}{delta})  等级: {diff.before.get('grade', '?')} -> "
           f"{diff.after.get('grade', '?')}")
     print(f"新增 {len(diff.added)} 项, 修复 {len(diff.fixed)} 项, "
-          f"仍在 {len(diff.kept)} 项\n")
-    for label, items in (("新增", diff.added), ("修复", diff.fixed)):
+          f"仍在 {len(diff.kept)} 项")
+    if diff.suppressed:
+        print(f"忽略 {len(diff.suppressed)} 项 (后一次扫描中被 --ignore 抑制)\n")
+    for label, items in (("新增", diff.added), ("修复", diff.fixed),
+                         ("忽略", diff.suppressed), ("取消忽略", diff.unsuppressed)):
         for f in items:
             sev = f.get("severity", "?")
             print(f"  [{label}] [{sev.upper():<8}] {f.get('rule_id')}  "

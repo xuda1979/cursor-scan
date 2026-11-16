@@ -110,6 +110,49 @@ class TestDiffing:
         a = {"findings": [_finding("a", "./x.py", 1)]}  # same file, diff path form
         assert diff_snapshots(b, a).kept
 
+    def test_suppressed_after_is_not_fixed(self):
+        # "b" was active in the before scan but suppressed in the after scan:
+        # it must land in the suppressed partition, not the "fixed" one.
+        before = {"findings": [_finding("a", "x.py", 1),
+                               _finding("b", "x.py", 2)]}
+        after = {"findings": [_finding("a", "x.py", 1)],
+                 "suppressed": [_finding("b", "x.py", 2)]}
+        diff = diff_snapshots(before, after)
+        assert [f["rule_id"] for f in diff.suppressed] == ["b"]
+        assert diff.fixed == []
+        assert [f["rule_id"] for f in diff.kept] == ["a"]
+
+    def test_absent_suppressed_still_fixed(self):
+        # "b" disappears from the after scan entirely (not in suppressed
+        # either): that is a genuine fix.
+        before = {"findings": [_finding("a", "x.py", 1),
+                               _finding("b", "x.py", 2)]}
+        after = {"findings": [_finding("a", "x.py", 1)]}
+        diff = diff_snapshots(before, after)
+        assert [f["rule_id"] for f in diff.fixed] == ["b"]
+        assert diff.suppressed == []
+
+    def test_unsuppressed_after_is_added(self):
+        # "b" was suppressed in before, active again in after.
+        before = {"findings": [_finding("a", "x.py", 1)],
+                  "suppressed": [_finding("b", "x.py", 2)]}
+        after = {"findings": [_finding("a", "x.py", 1),
+                              _finding("b", "x.py", 2)]}
+        diff = diff_snapshots(before, after)
+        assert [f["rule_id"] for f in diff.unsuppressed] == ["b"]
+        assert diff.added == []
+        assert diff.fixed == []
+
+    def test_still_suppressed_both_sides(self):
+        # A finding suppressed in both scans is neither fixed nor added.
+        before = {"findings": [], "suppressed": [_finding("b", "x.py", 2)]}
+        after = {"findings": [], "suppressed": [_finding("b", "x.py", 2)]}
+        diff = diff_snapshots(before, after)
+        assert diff.fixed == []
+        assert diff.added == []
+        assert diff.suppressed == []
+        assert diff.kept == []
+
 
 class TestCliHistory:
     def test_cli_diff_reports_changes(self, scan_bad_dir, scan_good_dir,

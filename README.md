@@ -95,8 +95,10 @@ cursor-scan --history            # 查看历史
 cursor-scan --diff proj-20261115-101000.json proj-20261115-102000.json  # 两次扫描差异
 ```
 
-`--diff` 按 `(rule_id, file, line)` 对齐两次扫描，列出新增 / 修复 / 仍在的问题，并给出
-评分与等级的变化。快照是纯 JSON（`result_to_dict` 结构），可被离线仪表板直接读取。
+`--diff` 按 `(rule_id, file, line)` 对齐两次扫描，列出新增 / 修复 / 忽略 / 仍在的问题，并给出
+评分与等级的变化。若后一次扫描通过 `--ignore` / `.cursor-scan.json` 抑制了某条发现，它会被归入
+「忽略」（而不是「修复」），避免把"只是改用了忽略"误报成"已经修好"。快照是纯 JSON
+（`result_to_dict` 结构），可被离线仪表板直接读取。
 
 ## Web 仪表板（离线）
 
@@ -110,7 +112,7 @@ cursor-scan --serve --port 9000  # 自定义端口
 ```
 
 页面：历史列表（最新在前，含评分/等级）、单个快照详情（评分卡 + 逐项证据 +
-代码片段）、双快照对比（`/diff?before=<ref>&after=<ref>`，新增 / 修复 / 仍在）。
+代码片段）、双快照对比（`/diff?before=<ref>&after=<ref>`，新增 / 修复 / 忽略 / 仍在）。
 另有 JSON API：`/api/history.json`、`/api/snapshot/<ref>`。仪表板只读历史目录，
 快照引用经路径校验（拒绝目录穿越），所有扫描内容 HTML 转义（防存储型 XSS）。
 

@@ -181,7 +181,9 @@ class ScanDiff:
     before: dict
     after: dict
     added: List[dict]     # in after but not before
-    fixed: List[dict]     # in before but not after
+    fixed: List[dict]     # in before but not after, and not suppressed
+    suppressed: List[dict]    # in before, ignored/suppressed in after
+    unsuppressed: List[dict]  # suppressed in before, active again in after
     kept: List[dict]      # present in both
 
     @property
@@ -195,10 +197,33 @@ def _finding_key(f: dict) -> Tuple[str, str, int]:
 
 
 def diff_snapshots(before: dict, after: dict) -> ScanDiff:
-    """Compare two scan snapshots by (rule_id, file, line)."""
+    """Compare two scan snapshots by (rule_id, file, line).
+
+    Findings that existed in the before scan but only *disappear* because the
+    after scan suppressed them (--ignore / .cursor-scan.json) are reported in
+    ``suppressed`` rather than ``fixed``, so a diff never implies a fix that
+    was actually just an ignore.
+    """
     before_keyed = {_finding_key(f): f for f in before.get("findings", [])}
     after_keyed = {_finding_key(f): f for f in after.get("findings", [])}
-    added = [f for k, f in sorted(after_keyed.items()) if k not in before_keyed]
-    fixed = [f for k, f in sorted(before_keyed.items()) if k not in after_keyed]
+    after_suppressed = {_finding_key(f): f
+                        for f in after.get("suppressed", [])}
+    before_suppressed = {_finding_key(f): f
+                         for f in before.get("suppressed", [])}
+    # A finding gone from after.findings is "suppressed" when it now sits in
+    # after.suppressed (and is not itself a fix that re-appeared as active).
+    suppressed = [f for k, f in sorted(before_keyed.items())
+                  if k in after_suppressed and k not in after_keyed]
+    fixed = [f for k, f in sorted(before_keyed.items())
+             if k not in after_keyed and k not in after_suppressed]
+    # A finding the after scan un-suppresses comes back active: report it as
+    # "unsuppressed", not as a brand-new "added" instance.
+    unsuppressed = [f for k, f in sorted(before_suppressed.items())
+                    if k in after_keyed and k not in before_keyed]
+    unsup_keys = {_finding_key(f) for f in unsuppressed}
+    added = [f for k, f in sorted(after_keyed.items())
+             if k not in before_keyed and k not in unsup_keys]
     kept = [f for k, f in sorted(after_keyed.items()) if k in before_keyed]
-    return ScanDiff(before=before, after=after, added=added, fixed=fixed, kept=kept)
+    return ScanDiff(before=before, after=after, added=added, fixed=fixed,
+                    suppressed=suppressed, kept=kept,
+                    unsuppressed=unsuppressed)

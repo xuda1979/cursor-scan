@@ -376,6 +376,9 @@ def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes
     delta_html = (f'<span class="delta-up">+{delta}</span>' if delta > 0
                   else f'<span class="delta-down">{delta}</span>' if delta < 0
                   else '<span class="muted">0</span>')
+    partitions = [("新增", diff.added), ("修复", diff.fixed),
+                  ("忽略", diff.suppressed), ("取消忽略", diff.unsuppressed)]
+    counts = "、".join(f"{t} {len(items)}" for t, items in partitions)
     score_row = (
         f'<div class="card"><h2>评分变化</h2>'
         f'<p class="muted">{_e(os.path.basename(before_path))}  →  '
@@ -385,8 +388,7 @@ def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes
         f'<span class="score">{after.get("score", "?")}</span>'
         f'<span style="padding-left:12px">({delta_html})</span>'
         f'<p>等级 {_e(before.get("grade", "?"))} → '
-        f'{_e(after.get("grade", "?"))}；新增 {len(diff.added)} 项、'
-        f'修复 {len(diff.fixed)} 项、仍在 {len(diff.kept)} 项。</p></div>'
+        f'{_e(after.get("grade", "?"))}；{_e(counts)}。</p></div>'
     )
 
     def section(title: str, findings: list) -> str:
@@ -398,7 +400,11 @@ def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes
         ) if findings else ""
         return details
 
-    body = score_row + section("新增", diff.added) + section("修复", diff.fixed)
+    body = score_row
+    for title, items in (("新增", diff.added), ("修复", diff.fixed),
+                         ("忽略（后一次扫描中被抑制）", diff.suppressed),
+                         ("取消忽略", diff.unsuppressed)):
+        body += section(title, items)
     kept = ("<details class=\"card\"><summary style=\"cursor:pointer\">"
             f"仍在的问题（{len(diff.kept)}）</summary>"
             + _findings_table(diff.kept) + "</details>"
