@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
+from . import __version__
 from .models import Evidence, ScanResult
 
 HISTORY_DIR_NAME = "history"
@@ -46,7 +47,7 @@ def evidence_to_dict(f: Evidence) -> dict:
 
 def result_to_dict(result: ScanResult) -> dict:
     return {
-        "tool": {"name": "cursor-scan", "version": "1.0.0"},
+        "tool": {"name": "cursor-scan", "version": __version__},
         "target": result.target,
         "started_at": result.started_at,
         "duration_sec": result.duration_sec,
@@ -60,6 +61,7 @@ def result_to_dict(result: ScanResult) -> dict:
             for d, dim in sorted(result.dimensions.items())
         },
         "findings": [evidence_to_dict(f) for f in result.findings],
+        "suppressed": [evidence_to_dict(f) for f in result.suppressed],
     }
 
 

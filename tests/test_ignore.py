@@ -173,3 +173,23 @@ class TestIgnoreIntegration:
         main([bad_copy, "--no-save", "--format", "json", "--history-dir", "unused"])
         doc = json.loads(capsys.readouterr().out)
         assert doc["score"] > 17  # clean result scores 17 with all 39 findings
+
+    def test_saved_snapshot_carries_suppressed(self, bad_copy, tmp_path, capsys):
+        # Snapshots (history/dashboard input) must round-trip suppressed
+        # findings exactly like the CLI JSON output does.
+        rc = main([bad_copy, "--ignore", "crypto.*", "--no-save",
+                   "--format", "json", "--history-dir", "unused"])
+        assert rc == 1
+        cli_doc = json.loads(capsys.readouterr().out)
+
+        rc = main([bad_copy, "--ignore", "crypto.*",
+                   "--history-dir", str(tmp_path)])
+        assert rc == 1
+        capsys.readouterr()
+        snap_path = sorted(tmp_path.glob("*.json"))[-1]
+        with open(snap_path, encoding="utf-8") as fh:
+            snap_doc = json.load(fh)
+
+        assert len(snap_doc["suppressed"]) == len(cli_doc["suppressed"]) == 7
+        kept_cli = {f["rule_id"] for f in cli_doc["findings"]}
+        assert all(f["rule_id"] not in kept_cli for f in snap_doc["suppressed"])
