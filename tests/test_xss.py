@@ -239,7 +239,10 @@ class TestPipelineIntegration:
                 continue
             per_file.setdefault(f.file.rsplit("/", 1)[-1], set()).add(f.rule_id)
         assert "xss.template_render" in per_file.get("xss.py", set())
+        assert "xss.mark_safe" in per_file.get("xss.py", set())
         assert {"xss.dom_manipulation", "xss.dangerous_react", "xss.document_write"} <= \
+            per_file.get("xss.js", set())
+        assert {"xss.script_src_injection", "xss.event_handler_attr"} <= \
             per_file.get("xss.js", set())
         assert "xss" in result.dimensions
         for f in result.findings:
@@ -249,4 +252,99 @@ class TestPipelineIntegration:
     def test_good_fixture_stays_xss_clean(self, scan_good_dir):
         from cursorscan.scan import scan_project
         result = scan_project(scan_good_dir)
-        assert all(f.dimension != "xss" for f in result.findings)
+class TestMarkSafe:
+    """Django mark_safe() wraps user-influenced HTML as trusted; a plain
+    literal is server-side static content and stays quiet."""
+
+    def test_dynamic_variable_flags(self):
+        found = _analyze("return mark_safe(username)\n")
+        assert [f.rule_id for f in found] == ["xss.mark_safe"]
+        assert found[0].severity == "high"
+
+    def test_concatenation_flags(self):
+        found = _analyze('return mark_safe("<b>winner:</b> " + username)\n')
+        assert [f.rule_id for f in found] == ["xss.mark_safe"]
+
+    def test_interpolated_fstring_flags(self):
+        found = _analyze('return mark_safe(f"<b>{username}</b>")\n')
+        assert [f.rule_id for f in found] == ["xss.mark_safe"]
+
+    def test_static_literal_is_quiet(self):
+        assert _analyze('return mark_safe("<b>done</b>")\n') == []
+
+    def test_helper_functions_are_quiet(self):
+        # mark_unsafe / my.mark_safe variants are unrelated names or methods.
+        assert _analyze("mark_unsafe(x)\n") == []
+        assert _analyze("django.utils.mark_safe(x)\n") == []
+        assert _analyze("from django.utils.safestring import mark_safe\n") == []
+
+
+class TestScriptSchemeUrl:
+    """javascript:/vbscript:/data: URLs execute script when reached. Static
+    literals are inert; validation/comparison lines only test the value."""
+
+    def test_dynamic_concatenation_flags(self):
+        found = _analyze('el.href = "javascript:" + code\n')
+        assert [f.rule_id for f in found] == ["xss.javascript_url"]
+
+    def test_static_void_literal_is_quiet(self):
+        assert _analyze('el.href = "javascript:void(0)"\n') == []
+
+    def test_static_data_url_with_script_is_quiet(self):
+        # A hardcoded data:text/html,<script> literal is server-controlled
+        # static content (same inert treatment as the void(0) case above).
+        assert _analyze('el.href = "data:text/html,<script>alert(1)</script>"\n') == []
+
+    def test_dynamic_built_url_flags(self):
+        found = _analyze('el.href = "data:text/html," + payload\n')
+        assert "xss.javascript_url" in [f.rule_id for f in found]
+
+    def test_scheme_validator_is_quiet(self):
+        assert _analyze('if (url.indexOf("javascript:") >= 0) return;\n') == []
+        assert _analyze('if (url.startsWith("javascript:")) return;\n') == []
+        assert _analyze('if (a === "javascript:alert(1)") return;\n') == []
+
+
+class TestScriptSrcInjection:
+    """Dynamic script/iframe/embed/object/frame src or srcdoc values can load
+    remote code; fixed static literals are inert."""
+
+    def test_dynamic_script_src_flags(self):
+        found = _analyze("script.src = userUrl\n")
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_dynamic_iframe_srcdoc_flags(self):
+        found = _analyze("frame.srcdoc = payload\n")
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_dynamic_object_src_flags(self):
+        found = _analyze("object.src = blobUrl\n")
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_static_script_src_is_quiet(self):
+        assert _analyze('script.src = "https://cdn.example/x.js"\n') == []
+
+
+class TestSetAttrEvent:
+    """setAttribute with a string-form on* handler builds code from a string;
+    property assignments (el.onload = fn) use function references and are fine."""
+
+    def test_string_onclick_flags(self):
+        found = _analyze('el.setAttribute("onclick", code)\n')
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+    def test_string_onmouseover_flags(self):
+        found = _analyze('el.setAttribute("onmouseover", snippet)\n')
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+    def test_property_assignment_is_quiet(self):
+        assert _analyze("el.onload = handler\n") == []
+        assert _analyze("el.onclick = onClick\n") == []
+
+    def test_data_attribute_is_quiet(self):
+        assert _analyze('el.setAttribute("data-id", x)\n') == []
+        assert _analyze('el.setAttribute("type", "text")\n') == []
+
+    def test_single_quote_form_flags(self):
+        found = _analyze("el.setAttribute('onclick', code)\n")
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]

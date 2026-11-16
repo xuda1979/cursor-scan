@@ -21,3 +21,20 @@ function reactRender(userHtml) {
   const props = { dangerouslySetInnerHTML: { __html: userHtml } };
   return props;
 }
+
+function loadUserScript(url) {
+  const script = document.createElement("script");
+  script.src = url;
+  document.head.appendChild(script);
+}
+
+function embedUserPage(url) {
+  const frame = document.createElement("iframe");
+  frame.src = url;
+  document.body.appendChild(frame);
+}
+
+function renderSnippet(snippet) {
+  const button = document.querySelector("#run");
+  button.setAttribute("onclick", snippet);
+}

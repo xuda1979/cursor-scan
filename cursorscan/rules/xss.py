@@ -88,6 +88,61 @@ _STATIC_REDIRECT_ARG = re.compile(
     re.VERBOSE,
 )
 
+# Django's mark_safe() is the server-side counterpart of a raw-HTML sink:
+# content passed through it bypasses autoescaping. A plain string literal is
+# static (server-controlled) content, but wrapping a variable, a formatted
+# string, or a concatenation marks user-influenced data as safe.
+RE_MARK_SAFE = re.compile(r"(?<!\.)\bmark_safe\s*\(")
+# A literal is static (server-controlled) content even with r/b/rb/br
+# prefixes; an f-string is only static when it carries no interpolation
+# (no ``{...}``), otherwise the wrapped value depends on runtime data.
+_STATIC_WRAP_ARG = re.compile(
+    r"""^(?:[rb][rb]?)?["'][^"'\n]*["')\s]*$"""     # plain / r / b / rb literal
+    r"""|^(?:f)["'][^"'\n{]*["')\s]*$""",           # f-string without {..}
+    re.I | re.VERBOSE,
+)
+
+# ``scheme:`` URLs that execute script when reached through a navigation or
+# scriptable element: javascript:, vbscript:, and data:text/html.  The match
+# stays broad; the analysis branch keeps static literals ("javascript:void(0)"
+# is inert inline code) and pure validation lines (indexOf / startsWith / ==
+# comparisons) quiet, so only concatenated or dynamically built values flag.
+RE_SCRIPT_SCHEME_URL = re.compile(
+    r"""\b(?:javascript|vbscript)\s*:"""
+    r"""|data:text/html\b""",
+    re.I,
+)
+# Validation / comparison contexts test for the scheme instead of navigating
+# to it; such lines never reach the dangerous dynamic assignment.
+RE_SCHEME_CHECK = re.compile(
+    r"""\b(?:indexOf|startsWith|endsWith|includes|match|search)\s*\("""
+    r"""|(?:===|!==|==|!=|<=|>=|<>|~=)""",
+)
+
+# Script-capable element attributes accepting a raw value: <script src> and
+# <iframe src> (script execution / clickjacking-bridge) plus the HTML5
+# srcdoc family. A static literal is inert; any non-literal value is
+# attacker-influenceable.
+RE_SRC_SINK = re.compile(
+    r"\b(?:script|iframe|embed|object|frame)\.(?:src|srcdoc)\s*=",
+    re.I,
+)
+
+# String forms of inline event handlers: el.setAttribute("onclick", code) is
+# the scriptable alternative to the el.onclick = fn property assignment.
+# Only the string-attribute form (delegation) is flagged; the .onload=fn
+# property-assignment idiom is function-reference-based and safe.
+RE_SETATTR_EVENT = re.compile(
+    r"""\.setAttribute\s*\(\s*["']on[a-z]+\s*["']\s*,""",
+    re.I,
+)
+
+
+def _static_literal_arg(arg: str) -> bool:
+    """True when ``arg`` is a plain string literal or a backtick template
+    literal with no interpolation (same shape as _STATIC_RHS)."""
+    return bool(_STATIC_RHS.search(arg.strip()))
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -149,4 +204,37 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                 findings.append(hit(lineno, "xss.open_redirect", "开放重定向",
                                     "redirect 到动态 URL，用户输入可被用于钓鱼/开放重定向",
                                     "校验跳转目标为站内白名单，拒绝外部 scheme"))
+        # Django mark_safe(): only a dynamic / built argument is dangerous;
+        # wrapping a plain static string is a no-op.
+        if RE_MARK_SAFE.search(line):
+            arg = line.split("(", 1)[1] if "(" in line else ""
+            if not _STATIC_WRAP_ARG.search(arg.strip()):
+                findings.append(hit(lineno, "xss.mark_safe", "Django 未转义输出",
+                                    "mark_safe 将变量标记为安全 HTML，绕过自动转义",
+                                    "渲染前对用户输入做 HTML 转义，或改用普通模板变量",
+                                    severity="high"))
+        # javascript:/vbscript:/data:text/html script URLs in navigation and
+        # src attributes. A static literal is inert (e.g. void(0) links) and
+        # scheme checks / comparisons only test the value, so both stay quiet;
+        # a concatenated or dynamic value executes script.
+        if RE_SCRIPT_SCHEME_URL.search(line):
+            rhs = line.split("=", 1)[1] if "=" in line else ""
+            if rhs and not RE_SCHEME_CHECK.search(line) \
+                    and not _static_literal_arg(rhs):
+                findings.append(hit(lineno, "xss.javascript_url", "脚本 URL 注入",
+                                    "动态构建的 javascript:/data: URL 会执行脚本",
+                                    "拒绝 javascript:/data: scheme，仅允许 http(s)"))
+        # Dynamic script/iframe/frame src or srcdoc: attacker-influenceable
+        # values can load remote scripts. Static-literal values are inert.
+        if RE_SRC_SINK.search(line):
+            arg = line.split("=", 1)[1] if "=" in line else ""
+            if not _static_literal_arg(arg):
+                findings.append(hit(lineno, "xss.script_src_injection", "脚本源注入",
+                                    "动态赋值给 script/iframe 的 src 可加载恶意脚本",
+                                    "固定允许的静态源，服务端校验 URL 白名单"))
+        # String-form inline event handlers via setAttribute("onclick", ...).
+        if RE_SETATTR_EVENT.search(line):
+            findings.append(hit(lineno, "xss.event_handler_attr", "事件属性注入",
+                                "setAttribute 设置字符串形式的内联事件处理器",
+                                "使用 addEventListener + 函数引用，或先转义回调内容"))
     return findings

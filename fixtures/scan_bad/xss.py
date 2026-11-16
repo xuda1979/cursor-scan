@@ -14,6 +14,11 @@ def mark_richtext(user_text: str):
     return Markup(user_text)
 
 
+def announce_winner(username: str):
+    badge = "<b>winner:</b> " + username
+    return mark_safe(badge)
+
+
 def safe_filter_bad(user: str):
     template = "{{ user | safe }}"
     return render_template_string(template, user=user)
