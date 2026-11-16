@@ -524,6 +524,23 @@ def analyze_jsts(path, src, findings):
                     "deser.eval", "eval 外部输入", "critical", path, line,
                     f"eval/Function 处理外部输入: {args}", "重构，不使用 eval", "deserialization"))
 
+        # string-code timers: setTimeout/setInterval/setImmediate convert a
+        # non-function first argument to a string and evaluate it as source
+        # (CWE-95) -- the async twin of ``eval``.  A concat-built or
+        # externally-sourced code string is the same injection surface, while
+        # a function callback or a static literal is not provably dynamic.
+        if fn in ("setTimeout", "setInterval", "setImmediate") \
+                or fn.endswith((".setTimeout", ".setInterval", ".setImmediate")):
+            first = _first_positional(call, bsrc)
+            if first is not None:
+                code, ntype = first
+                if ntype not in ("arrow_function", "function", "function_expression"):
+                    if "+" in code or "${" in code or _js_external(code):
+                        findings.append(_ev(
+                            "deser.eval", "eval 等价 (字符串定时器)", "critical", path, line,
+                            f"{fn} 以动态字符串为代码: {code}",
+                            "改为函数回调，勿拼接代码字符串", "deserialization"))
+
         # JSON.parse with reviver? Not a rule; skip.
 
         # SQL concat
@@ -611,6 +628,22 @@ def _js_positional_args(call, bsrc):
 
 
 _JS_PLAIN_STRING = re.compile(r"^(['\"])(.*?)\1$", re.S)
+
+
+def _first_positional(call, bsrc):
+    """``(source_text, tree_sitter_type)`` of the first positional argument,
+    or ``None`` for a call with no arguments.  Node type discriminates the
+    string-code timer forms: ``arrow_function``/``function`` callbacks are
+    safe, while a RHS whose type is not a function *and* whose text contains
+    concat/interpolation/external markers is a dynamic code string.
+    """
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return None
+    named = [a for a in args.named_children if a.type != "comment"]
+    if not named:
+        return None
+    return _bstr(bsrc, named[0].start_byte, named[0].end_byte), named[0].type
 
 
 def _js_plain_string(txt: str) -> str | None:

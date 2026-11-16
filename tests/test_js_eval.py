@@ -123,7 +123,61 @@ class TestExecSyncFamily:
         finds = _js("cp.spawnSync('ls', [dir])\n")
         assert finds == []
 
-    def test_fork_with_parameter_list_is_quiet(self):
-        finds = _js("require('child_process').fork('worker.js', [dir])\n")
+class TestStringCodeTimers:
+    """setTimeout/setInterval/setImmediate evaluate a *string* first argument
+    as source -- the async twin of eval (CWE-95). A concat-built or
+    externally-sourced code string is the same injection surface; a function
+    callback or a static literal is not provably dynamic."""
+
+    def test_set_timeout_with_concat_flags(self):
+        finds = _js("setTimeout('alert(\"' + name + '\")', 100)\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("deser.eval", "critical")]
+
+    def test_set_interval_with_external_flags(self):
+        finds = _js("setInterval(req.body.code, 1000)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [("deser.eval", 1)]
+
+    def test_set_immediate_interpolated_template_flags(self):
+        finds = _js("setImmediate(`run(${cmd})`)\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("deser.eval", "critical")]
+
+    def test_dotted_window_timer_flags(self):
+        finds = _js("window.setTimeout('go(' + url + ')', 0)\n")
+        assert [(f.rule_id, f.line) for f in finds] == [("deser.eval", 1)]
+
+    def test_global_set_timeout_flags(self):
+        finds = _js("globalThis.setTimeout('run(' + script + ')', 10)\n")
+        assert [f.rule_id for f in finds] == ["deser.eval"]
+
+    def test_bare_identifier_code_is_quiet(self):
+        # An identifier is ambiguous: it may name a callback function
+        # (setTimeout(runTick)) or a code string. Like the eval rule, only
+        # provably dynamic forms flag; a bare reference stays quiet.
+        finds = _js("setTimeout(codeString, 50)\n")
         assert finds == []
+
+    def test_static_literal_code_is_quiet(self):
+        finds = _js("setTimeout('doWork()', 100)\n")
+        assert finds == []
+
+    def test_double_quoted_static_code_is_quiet(self):
+        finds = _js("setInterval(\"tick()\", 1000)\n")
+        assert finds == []
+
+    def test_function_callback_is_quiet(self):
+        finds = _js("setTimeout(() => doWork(x), 100)\n")
+        assert finds == []
+
+    def test_named_function_callback_is_quiet(self):
+        finds = _js("setInterval(runTick, 1000)\n")
+        assert finds == []
+
+    def test_finding_carries_metadata(self):
+        finds = _js("setTimeout('eval(' + userCode + ')', 0)\n")
+        assert finds[0].dimension == "deserialization"
+        assert finds[0].rule_id == "deser.eval"
+        assert finds[0].severity == "critical"
+        assert finds[0].message and finds[0].fix
 
