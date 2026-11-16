@@ -142,6 +142,18 @@ RE_SETATTR_EVENT = re.compile(
 # string is inert server-controlled content.
 RE_SVELTE_HTML = re.compile(r"""\{@html\s+""")
 
+# Template-framework bindings that write raw HTML into the DOM: Vue's
+# ``v-html`` and its ``:innerHTML`` v-bind form, plus Angular's
+# ``[innerHTML]`` / ``[outerHTML]`` property bindings. The bound expression
+# is captured so a hardcoded string-literal stays quiet (inert static
+# content); any dynamic expression is attacker-influenceable.
+RE_HTML_BINDING = re.compile(
+    r"""\bv-html\s*=\s*["']([^"']+)["']"""
+    r"""|\[(?:inner|outer)HTML\]\s*=\s*["']([^"']+)["']"""
+    r"""|:innerHTML\s*=\s*["']([^"']+)["']""",
+    re.I,
+)
+
 
 def _static_literal_arg(arg: str) -> bool:
     """True when ``arg`` is a plain string literal or a backtick template
@@ -250,4 +262,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                                     "{@html ...} 直接插入未转义 HTML，用户输入可触发 XSS",
                                     "对内容做 HTML 转义，或改用普通插值 {expr}",
                                     severity="high"))
+        # Vue v-html / Angular [innerHTML] / :innerHTML raw-HTML bindings.
+        # The bound expression is captured; a hardcoded string-literal is inert
+        # static content, any dynamic value is attacker-influenceable.
+        if m := RE_HTML_BINDING.search(line):
+            payload = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+            if not _static_literal_arg(payload):
+                findings.append(hit(lineno, "xss.html_binding", "模板绑定原始 HTML",
+                                    "v-html / [innerHTML] 绑定将未转义 HTML 写入 DOM，"
+                                    "用户输入可触发 XSS",
+                                    "对绑定值做 HTML 转义，或使用普通插值 {{ expr }}"))
     return findings

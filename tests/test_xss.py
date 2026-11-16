@@ -375,3 +375,55 @@ class TestSvelteHtml:
 
     def test_import_lines_skipped(self):
         assert xss.analyze_code("t.svelte", "import { onMount } from 'svelte';\n") == []
+
+
+class TestHtmlBinding:
+    """Vue v-html / Angular [innerHTML] / :innerHTML raw-HTML bindings write
+    unescaped HTML into the DOM. Dynamic bound values flag as medium;
+    hardcoded string literals and plain interpolation stay quiet."""
+
+    def test_vue_v_html_flags(self):
+        found = xss.analyze_code("t.vue", '<div v-html="userBio"></div>\n')
+        assert [f.rule_id for f in found] == ["xss.html_binding"]
+
+    def test_vue_v_html_single_quotes_flags(self):
+        found = xss.analyze_code("t.vue", "<div v-html='userBio'></div>\n")
+        assert [f.rule_id for f in found] == ["xss.html_binding"]
+
+    def test_vue_v_html_bound_to_property_flags(self):
+        # A nested property is user-influenceable, just like a plain variable.
+        found = xss.analyze_code("t.vue", '<div v-html="article.html"></div>\n')
+        assert [f.rule_id for f in found] == ["xss.html_binding"]
+
+    def test_vue_colon_inner_html_flags(self):
+        # The ``v-bind`` shorthand form of v-html.
+        found = xss.analyze_code("t.vue", '<div :innerHTML="payload"></div>\n')
+        assert [f.rule_id for f in found] == ["xss.html_binding"]
+
+    def test_angular_inner_html_flags(self):
+        found = xss.analyze_code("t.vue", '<div [innerHTML]="post.body"></div>\n')
+        assert [f.rule_id for f in found] == ["xss.html_binding"]
+
+    def test_angular_outer_html_flags(self):
+        found = xss.analyze_code("t.vue", '<div [outerHTML]="card.template"></div>\n')
+        assert [f.rule_id for f in found] == ["xss.html_binding"]
+
+    def test_tailwind_like_inner_html_text_is_quiet(self):
+        # A plain HTML attribute token that merely contains "innerHTML"
+        # (not a binder of that name) is not a raw-HTML sink.
+        assert xss.analyze_code("t.vue",
+                                '<p class="x-innerhtml-helper">hi</p>\n') == []
+
+    def test_static_literal_is_quiet(self):
+        # A hardcoded literal is inert server-controlled content.
+        found = xss.analyze_code("t.vue", '<div v-html="\'<b>hi</b>\'"></div>\n')
+        assert [f.rule_id for f in found] == []
+
+    def test_plain_interpolation_is_quiet(self):
+        # {{ expr }} escapes; it is the safe counterpart of v-html.
+        assert xss.analyze_code("t.vue", "<p>{{ username }}</p>\n") == []
+
+    def test_finding_carries_fix(self):
+        found = xss.analyze_code("t.vue", '<div v-html="userBio"></div>\n')
+        assert found[0].dimension == "xss"
+        assert found[0].fix
