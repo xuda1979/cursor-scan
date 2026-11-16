@@ -315,8 +315,16 @@ def _page_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
         for d, dim in sorted(doc.get("dimensions", {}).items())
     ) or '<p class="muted">无维度评分</p>'
     table = _findings_table(doc.get("findings", []))
+    suppressed = doc.get("suppressed", [])
     body = (header + '<div class="card"><h2>维度评分</h2>' + dims + "</div>"
             + '<div class="card"><h2>逐项证据</h2>' + table + "</div>")
+    if suppressed:
+        body += (
+            '<div class="card"><h2>已忽略的发现（{n}）</h2>'
+            '<p class="muted">这些发现被 --ignore 或 .cursor-scan.json 抑制，'
+            '不参与评分与门禁判定。</p>{inner}'
+            .format(n=len(suppressed), inner=_findings_table(suppressed))
+        ) + "</div>"
     return _page(f"快照 {os.path.basename(path)}", body, nav)
 
 
@@ -334,6 +342,8 @@ def _score_header(doc: dict) -> str:
         '<span class="value">{scanned} 扫描 / {skipped} 跳过</span></span>'
         '<span class="metric"><span class="label">发现</span>'
         '<span class="value">{findings}</span></span>'
+        '<span class="metric"><span class="label">已忽略</span>'
+        '<span class="value">{suppressed}</span></span>'
         '<span class="metric"><span class="label">耗时</span>'
         '<span class="value">{dur}s</span></span>'
         "</div></div>"
@@ -346,6 +356,7 @@ def _score_header(doc: dict) -> str:
         scanned=doc.get("scanned_files", 0),
         skipped=doc.get("skipped_files", 0),
         findings=len(doc.get("findings", [])),
+        suppressed=len(doc.get("suppressed", [])),
         dur=doc.get("duration_sec", "?"),
     )
 

@@ -88,6 +88,21 @@ class TestSnapshotPage:
         assert status == 404
         assert "404" in body.decode("utf-8")
 
+    def test_snapshot_shows_suppressed_findings(self, tmp_path):
+        r = _result(score=80, grade="B", target="/tmp/proj_new", findings=[
+            _finding("injection.sql", "db.py", 7),
+        ])
+        r.suppressed = [_finding("secrets.hardcoded", "app.py", 10)]
+        save_snapshot(r, str(tmp_path))
+        status, _, body = route(str(tmp_path), "/snapshot/proj_new")
+        html = body.decode("utf-8")
+        assert status == 200
+        assert "已忽略的发现" in html
+        assert "secrets.hardcoded" in html
+        # header metric shows the suppressed count
+        assert "<span class=\"label\">已忽略</span>" in html
+        assert "已忽略的发现（1）" in html
+
     def test_snapshot_json_api(self, tmp_path):
         paths = _seed_history(str(tmp_path))
         ver, _, body = route(str(tmp_path),
