@@ -161,6 +161,17 @@ RE_SETATTR_EVENT = re.compile(
     re.I,
 )
 
+# The property-assignment counterpart of the setAttribute handler: assigning
+# a *string* directly to an inline event property (``el.onclick = '...'``).
+# A function-reference assignment (``el.onclick = onClick``) is the safe
+# idiom and never reaches the quote-led gate; a static string literal is
+# inert fixed behavior. Only a quote-led RHS that is not a static literal
+# builds the handler string dynamically from attacker-influenceable input.
+RE_ON_PROPERTY_ASSIGN = re.compile(
+    r"""\.on[a-z]+\s*=\s*["'`]""",
+    re.I,
+)
+
 # document.execCommand("insertHTML", false, html) parses the third argument
 # as raw HTML and inserts it into the DOM -- the execCommand counterpart of
 # insertAdjacentHTML (OWASP DOM-XSS). Only the insertHTML command carries an
@@ -332,6 +343,18 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "xss.event_handler_attr", "事件属性注入",
                                 "setAttribute 设置字符串形式的内联事件处理器",
                                 "使用 addEventListener + 函数引用，或先转义回调内容"))
+        # String-form inline event property assignment: ``el.onclick =
+        # 'go(' + url + ')'`` builds the handler code as a string.  A
+        # function-reference assignment (``el.onclick = onClick``) never
+        # reaches the quote gate, and a static string literal is inert fixed
+        # behavior; only a quote-led RHS that is not a literal is dynamic.
+        if RE_ON_PROPERTY_ASSIGN.search(line):
+            rhs = line.split("=", 1)[1] if "=" in line else ""
+            if not _static_literal_arg(rhs):
+                findings.append(hit(lineno, "xss.event_handler_attr", "事件属性注入",
+                                    "以字符串形式赋值内联事件处理器，动态拼接的代码"
+                                    "可被注入执行",
+                                    "使用 addEventListener + 函数引用，或先转义回调内容"))
         # document.execCommand("insertHTML", ...): the third argument is parsed
         # as raw HTML into the DOM. The payload is the value after the last
         # comma (the ``false`` showUI boolean and command name precede it); a

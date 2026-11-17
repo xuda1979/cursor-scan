@@ -581,6 +581,53 @@ class TestSetAttrEvent:
         assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
 
 
+class TestOnPropertyAssign:
+    """String-form inline event property assignment (``el.onclick = '...'``)
+    builds the handler code from a string, the property twin of the
+    setAttribute delegation form. A function-reference assignment
+    (``el.onclick = onClick``) is the safe idiom and stays quiet; a static
+    string literal is inert fixed behavior."""
+
+    def test_quote_concat_assignment_flags(self):
+        found = _analyze("el.onclick = 'go(' + url + ')'\n")
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+    def test_double_quote_dynamic_flags(self):
+        found = _analyze('el.onmouseover = "evil(" + data + ")"\n')
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+    def test_interpolated_template_flags(self):
+        found = _analyze("el.onclick = `run(${cmd})`\n")
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+    def test_any_handler_name_flags(self):
+        found = _analyze("img.onerror = 'report(' + location + ')'\n")
+        assert [f.rule_id for f in found] == ["xss.event_handler_attr"]
+
+    def test_function_reference_assignment_is_quiet(self):
+        # The safe idiom: assign a function, never a code string.
+        assert _analyze("el.onclick = onClick\n") == []
+        assert _analyze("el.onload = handler\n") == []
+        assert _analyze("el.onclick = () => go(nextUrl)\n") == []
+
+    def test_static_literal_assignment_is_quiet(self):
+        # A hardcoded handler string is inert fixed behavior.
+        assert _analyze("el.onclick = 'alert(1)'\n") == []
+        assert _analyze('el.onclick = "doWork()"\n') == []
+
+    def test_tag_or_attribute_not_matching(self):
+        # Only el.on<handler> = ... property assignments reach the gate.
+        assert _analyze("<div onclick='return doIt()'>\n") == []
+
+    def test_finding_carries_metadata(self):
+        found = _analyze("el.onclick = 'go(' + url + ')'\n")
+        assert len(found) == 1
+        f = found[0]
+        assert f.dimension == "xss"
+        assert f.rule_id == "xss.event_handler_attr"
+        assert f.message and f.fix
+
+
 class TestSvelteHtml:
     """Svelte's {@html ...} inserts raw unescaped HTML. Non-literal payloads
     flag as high; hardcoded strings and plain interpolation stay quiet."""
