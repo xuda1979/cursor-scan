@@ -1,10 +1,12 @@
 """Unit tests for the cross-language injection regex fallbacks.
 
 The line-scanner regex rules in cursorscan/rules/injection.py also cover PHP
-(`.` concat), Java (`+` concat) and Ruby (`+` concat / `#{}` interpolation)
-for both SQL string-concatenation and shell-command concatenation.  These
-tests lock in the dynamic forms as findings and the static/parameterized/
-argument-list forms as quiet negatives.
+(`.` concat), Java (`+` concat), Ruby (`+` concat / `#{}` interpolation),
+Go (`+` concat / fmt.Sprintf verbs), C# (`+` concat / `$"..."` interpolated
+templates) and Kotlin (`+` concat) for both SQL string-concatenation and
+shell-command concatenation.  These tests lock in the dynamic forms as
+findings and the static/parameterized/argument-list forms as quiet
+negatives.
 """
 
 from __future__ import annotations
@@ -167,8 +169,218 @@ class TestJavaShellConcat:
         assert self._reg('Runtime.getRuntime().exec("ls -la");\n') == []
 
 
+class TestGoSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.go", code)]
+
+    def test_dot_query_plus_concat_flags(self):
+        assert self._reg(
+            'rows, err := db.Query("SELECT * FROM users WHERE id = " + userInput)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_row_plus_concat_flags(self):
+        assert self._reg(
+            'row := db.QueryRow("SELECT name FROM users WHERE name = " + user.name)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_exec_plus_concat_flags(self):
+        assert self._reg('db.Exec("UPDATE t SET x = " + input)\n') == [
+            ("injection.sql_concat", 1)]
+
+    def test_query_context_ctx_first_flags(self):
+        # CommandContext-style receivers shift the ctx argument first.
+        assert self._reg(
+            'rows, err := db.QueryContext(ctx, "SELECT " + cols + " FROM t")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_exec_context_sprintf_flags(self):
+        assert self._reg(
+            'rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM t", cols))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_sprintf_format_verb_flags(self):
+        assert self._reg(
+            'rows, err := db.Query(fmt.Sprintf("SELECT %s FROM users WHERE id = %d", cols, id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            'rows, err := db.Query("SELECT * FROM users WHERE id = ?", id)\n') == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg('rows, err := db.Query("SELECT 1")\n') == []
+
+    def test_sprintf_without_sql_keyword_is_quiet(self):
+        assert self._reg('db.Query(fmt.Sprintf("version %s", ver))\n') == []
+
+
+class TestGoShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.go", code)]
+
+    def test_sh_c_concat_flags(self):
+        assert self._reg(
+            'exec.Command("/bin/sh", "-c", "ping -c 1 " + host).Run()\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_bash_c_sprintf_flags(self):
+        assert self._reg(
+            'exec.Command("bash", "-c", fmt.Sprintf("ls %s", dir))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_command_context_sh_c_flags(self):
+        assert self._reg(
+            'exec.CommandContext(ctx, "/bin/sh", "-c", "rm -rf " + path)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_arg_list_form_is_quiet(self):
+        assert self._reg('exec.Command("ping", host).Run()\n') == []
+
+    def test_ping_count_flag_is_quiet(self):
+        # "-c" is ping's count flag here, not a shell invocation.
+        assert self._reg('exec.Command("ping", "-c", host).Run()\n') == []
+
+    def test_static_sh_c_is_quiet(self):
+        assert self._reg('exec.Command("sh", "-c", "echo hi").Run()\n') == []
+
+
+class TestCSharpSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cs", code)]
+
+    def test_sql_command_ctor_plus_flags(self):
+        assert self._reg(
+            'var cmd = new SqlCommand("SELECT * FROM Users WHERE Id = " + userId, conn);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_npgsql_command_ctor_plus_flags(self):
+        assert self._reg(
+            'var cmd = new NpgsqlCommand("UPDATE t SET x = " + val, conn);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_command_text_plus_flags(self):
+        assert self._reg(
+            'cmd.CommandText = "SELECT name FROM users WHERE name = " + input;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_command_text_interpolated_flags(self):
+        assert self._reg(
+            'cmd.CommandText = $"SELECT * FROM users WHERE id = {userId}";\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_at_id_is_quiet(self):
+        assert self._reg(
+            'var cmd = new SqlCommand("SELECT * FROM Users WHERE Id = @id", conn);\n'
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'var cmd = new SqlCommand("SELECT * FROM Users", conn);\n') == []
+
+
+class TestCSharpShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cs", code)]
+
+    def test_process_start_two_arg_plus_flags(self):
+        assert self._reg(
+            'Process.Start("cmd.exe", "/c " + payload);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_info_object_initializer_flags(self):
+        assert self._reg(
+            'ProcessStartInfo psi = new ProcessStartInfo() { Arguments = "ls " + dir };\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_info_interpolated_flags(self):
+        assert self._reg(
+            'new ProcessStartInfo { Arguments = $"rm -rf {path}" };\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_info_with_filename_flags(self):
+        assert self._reg(
+            'ProcessStartInfo psi = new ProcessStartInfo { FileName = "sh", Arguments = "-c " + cmd };\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_info_nested_initializer_flags(self):
+        assert self._reg(
+            'new Process { StartInfo = { Arguments = "curl " + url } };\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_info_ctor_plus_flags(self):
+        assert self._reg(
+            'ProcessStartInfo psi = new ProcessStartInfo("ls", "-l " + dir);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_start_info_arguments_member_flags(self):
+        assert self._reg(
+            'var p = new Process(); p.StartInfo.Arguments = "ping " + host;\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_process_start_is_quiet(self):
+        assert self._reg('Process.Start("notepad.exe");\n') == []
+
+    def test_static_arguments_assignment_is_quiet(self):
+        assert self._reg('psi.Arguments = "--help";\n') == []
+
+
+class TestKotlinSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.kt", code)]
+
+    def test_execute_query_plus_concat_flags(self):
+        assert self._reg(
+            'val rs = stmt.executeQuery("SELECT * FROM users WHERE id = " + id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_query_plus_concat_flags(self):
+        assert self._reg(
+            'db.rawQuery("SELECT * FROM t WHERE x = " + input, null)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_exec_sql_plus_concat_flags(self):
+        assert self._reg(
+            'db.execSQL("DROP TABLE " + tableName)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_update_plus_concat_flags(self):
+        assert self._reg(
+            'stmt.executeUpdate("DELETE FROM t WHERE id = " + id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            'stmt.executeQuery("SELECT * FROM users WHERE id = ?")\n') == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg('stmt.executeQuery("SELECT 1")\n') == []
+
+
+class TestKotlinShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.kt", code)]
+
+    def test_runtime_exec_plus_concat_flags(self):
+        assert self._reg(
+            'Runtime.getRuntime().exec("ping " + host)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_builder_sh_c_plus_flags(self):
+        assert self._reg(
+            'ProcessBuilder("/bin/sh", "-c", "ls " + dir).start()\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_builder_arg_list_is_quiet(self):
+        assert self._reg(
+            'ProcessBuilder("ping", host).start()\n') == []
+
+    def test_static_runtime_exec_is_quiet(self):
+        assert self._reg('Runtime.getRuntime().exec("ls -la")\n') == []
+
+
 class TestCrossExtensionSilence:
-    """The new regexes must not fire on Python/JS safe forms."""
+    """The new regexes must not fire on Python/JS safe forms, and the
+    Go/C#/Kotlin patterns must not leak onto other languages' files."""
 
     def _reg(self, code: str, path: str):
         return [(f.rule_id, f.line) for f in analyze_injection(path, code)]
@@ -186,6 +398,37 @@ class TestCrossExtensionSilence:
     def test_js_parameterized_query_is_quiet(self):
         assert self._reg('conn.query("SELECT * FROM t WHERE id = ?", [id]);\n',
                          "x.js") == []
+
+    def test_go_parameterized_query_is_quiet(self):
+        assert self._reg('db.Query("SELECT * FROM t WHERE id = ?", id)\n',
+                         "x.go") == []
+
+    def test_go_arg_list_command_is_quiet(self):
+        assert self._reg('exec.Command("ping", "-c", host).Run()\n', "x.go") == []
+
+    def test_csharp_parameterized_command_is_quiet(self):
+        assert self._reg(
+            'var cmd = new SqlCommand("SELECT * FROM Users WHERE Id = @id", conn);\n',
+            "x.cs") == []
+
+    def test_csharp_static_process_start_is_quiet(self):
+        assert self._reg('Process.Start("notepad.exe");\n', "x.cs") == []
+
+    def test_kotlin_parameterized_query_is_quiet(self):
+        assert self._reg('stmt.executeQuery("SELECT * FROM users WHERE id = ?")\n',
+                         "x.kt") == []
+
+    def test_go_query_receiver_silent_on_java_file(self):
+        # The .Query("..." + x) receiver only fires for .go extensions.
+        assert self._reg('db.Query("SELECT * FROM t WHERE id = " + uid)\n',
+                         "x.java") == []
+
+    def test_csharp_process_start_silent_on_java_file(self):
+        # Process.Start only fires on .cs; the Java shell rule uses Runtime.exec.
+        assert self._reg('Process.Start("cmd", "/c " + payload);\n',
+                         "x.cs") == [("injection.shell_concat", 1)]
+        assert self._reg('Process.Start("cmd", "/c " + payload);\n',
+                         "x.java") == []
 
 
 class TestPythonFStringSqlConcat:
