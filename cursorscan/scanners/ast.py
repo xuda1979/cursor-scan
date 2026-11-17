@@ -298,6 +298,10 @@ def analyze_python(path, src, findings):
                     findings.append(_ev(
                         "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                         f"subprocess 开放 shell 且拼接命令: {args}", "传入参数列表, 关闭 shell", "injection"))
+            elif _SHELL_EQ_FALSE.search(args):
+                # Explicit shell=False: the shell is disabled, so a concat
+                # command string is not interpreted by a shell.
+                pass
             elif fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
                         "subprocess.check_output", "subprocess.check_call",
                         "os.system", "os.popen"):
@@ -619,7 +623,11 @@ def analyze_jsts(path, src, findings):
             sh_dash_c = _SHELL_BIN.search(cmd) is not None \
                 and _SHELL_DASH_C.search(args) is not None \
                 and _has_concat(args)
-            if "shell" in args.lower() and _has_concat(args):
+            if _SHELL_OPT_FALSE.search(args):
+                # Explicit shell:false disables the shell; a concat-built
+                # command string is never interpreted by a shell here.
+                pass
+            elif _SHELL_OPT_TRUE.search(args) and _has_concat(args):
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                     f"{fn} 开启 shell 并拼接命令: {args}", "使用参数列表", "injection"))
@@ -696,6 +704,14 @@ _JS_PLAIN_STRING = re.compile(r"^(['\"])(.*?)\1$", re.S)
 # family and the Python subprocess family).
 _SHELL_BIN = re.compile(r"(?i)\b(sh|bash|zsh|dash)\b")
 _SHELL_DASH_C = re.compile(r"-c\b")
+# Explicit shell options.  shell:true (JS) enables a shell; an explicit
+# shell:false / shell=False is a security configuration that disables it, so
+# a shell-off line must not fire shell-concat even when the command string is
+# concat-built.  These match only the *literal* options (a ``shell`` variable
+# read from elsewhere is not a visible opt-out).
+_SHELL_OPT_TRUE = re.compile(r"shell\s*:\s*true", re.I)
+_SHELL_OPT_FALSE = re.compile(r"shell\s*:\s*false", re.I)
+_SHELL_EQ_FALSE = re.compile(r"shell\s*=\s*False", re.I)
 
 
 def _first_positional(call, bsrc):

@@ -137,6 +137,24 @@ class TestPythonShellSlotAwareConcat:
         finds = _py('subprocess.run("apt-get update && apt-get install " + name, shell=True)\n')
         assert [f.rule_id for f in finds] == ["injection.shell_concat"]
 
+    def test_explicit_shell_false_is_quiet(self):
+        # shell=False is a security configuration: no shell is invoked, so a
+        # concat-built command string never reaches a shell.
+        finds = _py('subprocess.run("ls " + path, shell=False)\n')
+        assert finds == []
+
+    def test_explicit_shell_false_fstring_is_quiet(self):
+        finds = _py('subprocess.run(f"ping {host}", shell=False)\n')
+        assert finds == []
+
+    def test_explicit_shell_false_with_spaces_is_quiet(self):
+        finds = _py('subprocess.run("ls " + path, shell = False)\n')
+        assert finds == []
+
+    def test_explicit_shell_false_argv_is_quiet(self):
+        finds = _py('subprocess.run(["ls", d], shell=False)\n')
+        assert finds == []
+
 
 class TestJSTemplateLiteralConcat:
     def test_db_query_template_literal_flags(self):
@@ -213,6 +231,27 @@ class TestJSShellSlotAwareConcat:
 
     def test_spawn_sync_arglist_concat_is_quiet(self):
         finds = _js("cp.spawnSync('echo', [prefix + name])\n")
+        assert finds == []
+
+    def test_spawn_explicit_shell_false_is_quiet(self):
+        # shell:false explicitly disables the shell, so the concat-built
+        # command string is never interpreted by a shell.
+        finds = _js("spawn('echo ' + msg, [], { shell: false })\n")
+        assert finds == []
+
+    def test_exec_explicit_shell_false_is_quiet(self):
+        finds = _js("exec('ls ' + dir, { shell: false })\n")
+        assert finds == []
+
+    def test_exec_without_shell_option_still_flags(self):
+        # exec always interprets its command through a shell; no options.
+        finds = _js("exec('ls ' + dir)\n")
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_spawn_explicit_shell_true_voice_shell_false_is_quiet(self):
+        # The last option wins at runtime; one explicit false among many is
+        # enough to quiet the shell-injection line.
+        finds = _js("spawn('echo ' + msg, [], { shell: false, detached: true })\n")
         assert finds == []
 
 

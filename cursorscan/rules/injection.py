@@ -55,6 +55,7 @@ RE_SHELL_CONCAT = re.compile(
 RE_DANGEROUS_SHELL = re.compile(
     r"\b(shell\s*=\s*True|shell:\s*true)\b", re.I
 )
+RE_SHELL_OFF = re.compile(r"\bshell\s*=\s*False\b", re.I)
 # Python f-string shell forms: os.system/os.popen/subprocess family called
 # directly with an interpolating f-string (os.system(f"rm -rf {dir}")).  The
 # `{...}` interpolation is required; static f-strings (os.system(f"echo hi"))
@@ -237,7 +238,8 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if py_ext and RE_SHELL_FSTRING_PY.search(line) \
-                and not (RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower()):
+                and not (RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower()) \
+                and not RE_SHELL_OFF.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         # PHP '.', Java '+', Ruby '+' / '#{}' SQL concatenation.

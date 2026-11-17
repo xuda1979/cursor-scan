@@ -519,5 +519,10 @@ class TestPythonFStringShellConcat:
         assert self._reg('subprocess.run(f"ping {host}", shell=True)\n') == [
             ("injection.shell_concat", 1)]
 
+    def test_subprocess_fstring_explicit_shell_false_is_quiet(self):
+        # shell=False explicitly disables the shell; the interpolating
+        # f-string is never interpreted by a shell.
+        assert self._reg('subprocess.run(f"ping {host}", shell=False)\n') == []
+
     def test_import_line_is_quiet(self):
         assert self._reg('from subprocess import run\n') == []
