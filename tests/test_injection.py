@@ -101,6 +101,49 @@ class TestJavaSqlConcat:
     def test_string_format_without_sql_keyword_is_quiet(self):
         assert self._reg('stmt.executeQuery(String.format("version %s", v));\n') == []
 
+    def test_jdbc_template_query_concat_flags(self):
+        assert self._reg(
+            'jdbcTemplate.query("SELECT * FROM u WHERE n = " + name);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_jdbc_query_for_list_concat_flags(self):
+        assert self._reg(
+            'jdbc.queryForList("SELECT * FROM u WHERE id = " + id, args);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_jdbc_template_query_for_object_concat_flags(self):
+        assert self._reg(
+            'jdbcTemplate.queryForObject("SELECT name FROM u WHERE id = " + id, String.class);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_jdbc_template_update_concat_flags(self):
+        assert self._reg('jdbcTemplate.update("UPDATE t SET x = " + v);\n') == [
+            ("injection.sql_concat", 1)]
+
+    def test_mybatis_select_interpolation_flags(self):
+        assert self._reg('@Select("SELECT * FROM t WHERE id = ${id}")\n') == [
+            ("injection.sql_concat", 1)]
+
+    def test_mybatis_update_interpolation_flags(self):
+        assert self._reg('@Update("UPDATE t SET n = ${name} WHERE id = 1")\n') == [
+            ("injection.sql_concat", 1)]
+
+    def test_jdbc_template_parameterized_is_quiet(self):
+        assert self._reg(
+            'jdbcTemplate.query("SELECT * FROM u WHERE n = ?", args);\n') == []
+
+    def test_jdbc_template_static_is_quiet(self):
+        assert self._reg('jdbcTemplate.query("SELECT 1");\n') == []
+
+    def test_mybatis_bind_placeholder_is_quiet(self):
+        assert self._reg('@Select("SELECT * FROM t WHERE id = #{id}")\n') == []
+
+    def test_mybatis_static_is_quiet(self):
+        assert self._reg('@Select("SELECT 1")\n') == []
+
+    def test_dao_query_for_list_is_quiet(self):
+        assert self._reg('dao.queryForList("SELECT 1");\n') == []
+
 
 class TestRubySqlConcat:
     def _reg(self, code: str):
@@ -415,6 +458,23 @@ class TestKotlinSqlConcat:
 
     def test_static_query_is_quiet(self):
         assert self._reg('stmt.executeQuery("SELECT 1")\n') == []
+
+    def test_jdbc_template_query_concat_flags(self):
+        assert self._reg(
+            'jdbcTemplate.query("SELECT * FROM u WHERE n = " + name)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_jdbc_query_for_list_concat_flags(self):
+        assert self._reg(
+            'jdbc.queryForList("SELECT * FROM u WHERE id = " + id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_jdbc_template_parameterized_is_quiet(self):
+        assert self._reg(
+            'jdbcTemplate.query("SELECT * FROM u WHERE n = ?", args)\n') == []
+
+    def test_jdbc_template_static_is_quiet(self):
+        assert self._reg('jdbcTemplate.query("SELECT 1")\n') == []
 
 
 class TestKotlinShellConcat:

@@ -95,12 +95,18 @@ RE_SQL_CONCAT_PHP = re.compile(
 # Java uses the `+` concatenation operator on Statement/PreparedStatement
 # builders and executors, and String.format with a printf verb inside
 # execute(Query|Update) feeds a formatted SQL literal straight to the driver
-# (the Go fmt.Sprintf analog).  Static literals and parameterized ../?
-# placeholders (bound separately) are not concatenations and stay quiet.
+# (the Go fmt.Sprintf analog).  Spring JdbcTemplate receivers (query/queryForList/
+# execute/update) and MyBatis @Select/@Update/@Delete/@Insert annotations
+# interpolate SQL too: the ${...} placeholder is textually substituted, unlike
+# the safe #{...} bind form.  Static literals, parameterized ../?/#{...}
+# placeholders (bound separately) and non-substituted @Select("SELECT 1") stay
+# quiet.
 RE_SQL_CONCAT_JAVA = re.compile(
     r"\.execute(?:Query|Update)?\s*\(\s*(?:" + _SQL_STR + r")\s*\+"
     r"|\.prepareStatement\s*\(\s*(?:" + _SQL_STR + r")\s*\+"
-    r"|\.execute(?:Query|Update)?\s*\(\s*String\.format\s*\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\"",
+    r"|\.execute(?:Query|Update)?\s*\(\s*String\.format\s*\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\""
+    r"|\.?(?:jdbcTemplate|jdbc)\.(?:query|queryForList|queryForObject|execute|update)\s*\(\s*(?:" + _SQL_STR + r")\s*\+"
+    r"|@(?:Select|Update|Delete|Insert)\s*\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$\{[^}]+\}",
     re.I,
 )
 # Ruby: ActiveRecord finders/exec helpers taking a concatenated SQL string,
@@ -197,12 +203,15 @@ RE_SHELL_CONCAT_CS = re.compile(
 )
 # Kotlin (.kt): JDBC/Android SQL receivers (executeQuery/executeUpdate/
 # execute/rawQuery/execSQL) with `+` concatenation, mirroring the Java rule
-# shape (execSQL is Android SQLite); shell forms: Runtime.getRuntime().exec
-# with `+` (Java interop) and ProcessBuilder launching a shell -c with a
-# concatenated command string.  Parameterized ? / rawQuery selectionArgs and
-# ProcessBuilder arg lists stay quiet.
+# shape (execSQL is Android SQLite), plus the Spring JdbcTemplate receivers
+# (query/queryForList/execute/update) taking a concatenated SQL literal.
+# Shell forms: Runtime.getRuntime().exec with `+` (Java interop) and
+# ProcessBuilder launching a shell -c with a concatenated command string.
+# Parameterized ? / rawQuery selectionArgs and ProcessBuilder arg lists stay
+# quiet.
 RE_SQL_CONCAT_KT = re.compile(
-    r"\.(?:executeQuery|executeUpdate|execute|execSQL|rawQuery)\s*\(\s*(?:" + _SQL_STR + r")\s*\+",
+    r"\.(?:executeQuery|executeUpdate|execute|execSQL|rawQuery)\s*\(\s*(?:" + _SQL_STR + r")\s*\+"
+    r"|\.?(?:jdbcTemplate|jdbc)\.(?:query|queryForList|queryForObject|execute|update)\s*\(\s*(?:" + _SQL_STR + r")\s*\+",
     re.I,
 )
 RE_SHELL_CONCAT_KT = re.compile(
