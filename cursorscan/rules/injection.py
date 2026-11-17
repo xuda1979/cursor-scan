@@ -93,10 +93,14 @@ RE_SQL_CONCAT_PHP = re.compile(
     re.I,
 )
 # Java uses the `+` concatenation operator on Statement/PreparedStatement
-# executors.  Static literals and parameterized ../? placeholders (bound
-# separately) are not concatenations and stay quiet.
+# builders and executors, and String.format with a printf verb inside
+# execute(Query|Update) feeds a formatted SQL literal straight to the driver
+# (the Go fmt.Sprintf analog).  Static literals and parameterized ../?
+# placeholders (bound separately) are not concatenations and stay quiet.
 RE_SQL_CONCAT_JAVA = re.compile(
-    r"\.execute(?:Query|Update)?\s*\(\s*(?:" + _SQL_STR + r")\s*\+",
+    r"\.execute(?:Query|Update)?\s*\(\s*(?:" + _SQL_STR + r")\s*\+"
+    r"|\.prepareStatement\s*\(\s*(?:" + _SQL_STR + r")\s*\+"
+    r"|\.execute(?:Query|Update)?\s*\(\s*String\.format\s*\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\"",
     re.I,
 )
 # Ruby: ActiveRecord finders/exec helpers taking a concatenated SQL string,
@@ -146,7 +150,8 @@ RE_SHELL_CONCAT_JAVA = re.compile(
 # optional ``[^,]+,\s*`` group.
 RE_SQL_CONCAT_GO = re.compile(
     r"\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?(?:" + _SQL_STR + r")\s*\+"
-    r"|\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?fmt\.Sprintf\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\"",
+    r"|\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?fmt\.Sprintf\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\""
+    r"|\.(?:Where|Joins|Having)\s*\(\s*(?:\"[^\"]*\"|'[^']*')\s*\+",
     re.I,
 )
 RE_SHELL_CONCAT_GO = re.compile(

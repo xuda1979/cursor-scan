@@ -77,6 +77,30 @@ class TestJavaSqlConcat:
     def test_parameterized_statement_is_quiet(self):
         assert self._reg('ps.executeQuery("SELECT * FROM t WHERE id = ?");\n') == []
 
+    def test_prepare_statement_concat_flags(self):
+        assert self._reg(
+            'PreparedStatement ps = conn.prepareStatement("SELECT * FROM users WHERE id = " + uid);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_query_string_format_flags(self):
+        assert self._reg(
+            'stmt.executeQuery(String.format("SELECT %s FROM users WHERE id = %d", cols, id));\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_prepare_statement_embedded_quote_flags(self):
+        assert self._reg(
+            "ps = conn.prepareStatement(\"UPDATE t SET name = '\" + n + \"' WHERE id = 1\");\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_prepare_statement_parameterized_is_quiet(self):
+        assert self._reg('conn.prepareStatement("SELECT * FROM t WHERE id = ?");\n') == []
+
+    def test_prepare_statement_static_is_quiet(self):
+        assert self._reg('conn.prepareStatement("SELECT 1");\n') == []
+
+    def test_string_format_without_sql_keyword_is_quiet(self):
+        assert self._reg('stmt.executeQuery(String.format("version %s", v));\n') == []
+
 
 class TestRubySqlConcat:
     def _reg(self, code: str):
@@ -229,6 +253,26 @@ class TestGoSqlConcat:
 
     def test_raw_static_is_quiet(self):
         assert self._reg('db.Raw("SELECT 1")\n') == []
+
+    def test_where_concat_flags(self):
+        assert self._reg('db.Where("name = " + name).Find(&users)\n') == [
+            ("injection.sql_concat", 1)]
+
+    def test_joins_concat_flags(self):
+        assert self._reg(
+            'db.Table("u").Joins("JOIN orders o ON o.uid = u.id WHERE o.x = " + cond)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_having_concat_flags(self):
+        assert self._reg('db.Having("COUNT(*) > " + min).Group("cat")\n') == [
+            ("injection.sql_concat", 1)]
+
+    def test_where_parameterized_is_quiet(self):
+        assert self._reg('db.Where("name = ?", name).First(&u)\n') == []
+
+    def test_where_keyword_args_is_quiet(self):
+        # GORM map/struct condition form carries no literal SQL.
+        assert self._reg('db.Where(map[string]interface{}{"name": name}).Find(&u)\n') == []
 
 
 class TestGoShellConcat:
