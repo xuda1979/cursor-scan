@@ -518,6 +518,53 @@ class TestPythonFStringSqlConcat:
         assert self._reg('db.getquery(f"SELECT * FROM t WHERE id = {uid}")\n') == []
 
 
+class TestPythonAsyncSqlRegex:
+    """Regex-layer parity for asyncpg / aiosqlite async SQL receivers:
+    fetchval/fetchrow/fetch/fetchmany/executescript with `+` concatenation
+    or f-string interpolation flag; parameterized and static forms stay
+    quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py", code)]
+
+    def test_fetchval_concat_flags(self):
+        assert self._reg("await pool.fetchval('SELECT * FROM users WHERE id = ' + uid)\n"
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_fetchrow_concat_flags(self):
+        assert self._reg("await pool.fetchrow('SELECT * FROM users WHERE name = ' + name)\n"
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_conn_fetch_concat_flags(self):
+        assert self._reg("await conn.fetch('SELECT * FROM orders WHERE total > ' + amt)\n"
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_executescript_concat_flags(self):
+        assert self._reg("db.executescript('DELETE FROM t WHERE id = ' + i)\n"
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_fetchval_fstring_flags(self):
+        assert self._reg('await pool.fetchval(f"SELECT * FROM users WHERE id = {uid}")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_fetchrow_fstring_flags(self):
+        assert self._reg('await conn.fetchrow(f"SELECT * FROM t WHERE id = {i}")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_fetchval_parameterized_is_quiet(self):
+        assert self._reg("await pool.fetchval('SELECT * FROM users WHERE id = $1', uid)\n") == []
+
+    def test_fetchval_static_is_quiet(self):
+        assert self._reg("await pool.fetchval('SELECT 1')\n") == []
+
+    def test_conn_fetch_static_is_quiet(self):
+        assert self._reg("async for r in conn.fetch('SELECT * FROM t'):\n") == []
+
+    def test_non_sql_fetch_is_quiet(self):
+        # A json.fetch(...) data read is not a SQL entry point.
+        assert self._reg("row = json.fetch('data')\n") == []
+
+
 class TestPythonFStringShellConcat:
     def _reg(self, code: str):
         return [(f.rule_id, f.line) for f in analyze_injection("x.py", code)]

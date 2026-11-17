@@ -14,7 +14,7 @@ from .helpers import code_lines
 
 # Regex fallbacks ------------------------------------------------------------
 RE_SQL_CONCAT_PY = re.compile(
-    r"\b(execute|executemany|cursor\.execute|db\.query|query_all|query_one|run_query|cursor3\.execute|db.execute)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
+    r"\b(execute|executemany|executescript|cursor\.execute|db\.query|db\.execute|query_all|query_one|run_query|cursor3\.execute|fetchval|fetchrow|fetch|fetchmany)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
     re.I,
 )
 # Assignment form: query = f"... {user_input} ..." followed later by execute(query)
@@ -31,7 +31,7 @@ RE_SQL_FSTRING_ASSIGN = re.compile(
 # [^"'] class would break on embedded opposite quotes, e.g.
 # f"DELETE ... WHERE owner = '{owner}'").
 RE_SQL_FSTRING_CALL_PY = re.compile(
-    r"\b(?:execute|executemany|query|query_all|query_one|run_query)\s*\(\s*(?:"
+    r"\b(?:execute|executemany|executescript|query|query_all|query_one|run_query|cursor\.execute|db\.execute|fetchval|fetchrow|fetch|fetchmany)\s*\(\s*(?:"
     r"f\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\{[^}]+\}"
     r"|f'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*\{[^}]+\})",
     re.I,

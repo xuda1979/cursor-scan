@@ -156,6 +156,54 @@ class TestPythonShellSlotAwareConcat:
         assert finds == []
 
 
+class TestPythonAsyncSqlDrivers:
+    """Asyncpg / aiosqlite async SQL receivers: pool/conn/db fetchval,
+    fetchrow, fetch, fetchmany and executescript are SQL entry points, so a
+    concatenated or f-string-interpolated SQL literal at the call must flag
+    exactly as the sync .execute family does.  Parameterized ($1/?) and
+    static forms stay quiet."""
+
+    def test_pool_fetchval_concat_flags(self):
+        finds = _py("await pool.fetchval('SELECT * FROM users WHERE id = ' + uid)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pool_fetchrow_concat_flags(self):
+        finds = _py("await pool.fetchrow('SELECT * FROM users WHERE name = ' + name)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_conn_fetch_concat_flags(self):
+        finds = _py("await conn.fetch('SELECT * FROM orders WHERE total > ' + amt)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pool_fetchmany_concat_flags(self):
+        finds = _py("rows = await pool.fetchmany('SELECT * FROM t WHERE x = ' + v, 10)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_db_executescript_concat_flags(self):
+        finds = _py("db.executescript('DELETE FROM t WHERE id = ' + i)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pool_fetchval_fstring_flags(self):
+        finds = _py('await pool.fetchval(f"SELECT * FROM users WHERE id = {uid}")\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_conn_fetchrow_fstring_flags(self):
+        finds = _py('await conn.fetchrow(f"SELECT * FROM t WHERE id = {i}")\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pool_fetchval_parameterized_is_quiet(self):
+        finds = _py("await pool.fetchval('SELECT * FROM users WHERE id = $1', uid)\n")
+        assert finds == []
+
+    def test_pool_fetchval_static_is_quiet(self):
+        finds = _py("await pool.fetchval('SELECT 1')\n")
+        assert finds == []
+
+    def test_conn_fetch_static_is_quiet(self):
+        finds = _py("async for r in conn.fetch('SELECT * FROM t'):\n")
+        assert finds == []
+
+
 class TestJSTemplateLiteralConcat:
     def test_db_query_template_literal_flags(self):
         finds = _js("db.query(`SELECT * FROM users WHERE id = ${id}`);\n")

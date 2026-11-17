@@ -276,9 +276,11 @@ def analyze_python(path, src, findings):
                     f"{fn} 接收外部输入: {args}", "重构，不使用 eval/exec 解析数据", "deserialization"))
 
         # ------ injection ------
-        if fn.endswith(".execute") or fn in ("cursor.execute", "db.execute", "conn.execute",
-                                              "execute", "executemany", "cursor3.execute",
-                                              "mysql.cursor.execute"):
+        if fn.endswith((".execute", ".executemany", ".executescript",
+                        ".fetchval", ".fetchrow", ".fetchmany", ".fetch")) \
+                or fn in ("cursor.execute", "db.execute", "conn.execute",
+                          "execute", "executemany", "cursor3.execute",
+                          "mysql.cursor.execute"):
             if _contains_sql(args) and _has_concat(args):
                 findings.append(_ev(
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
