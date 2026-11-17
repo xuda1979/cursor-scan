@@ -33,12 +33,12 @@ RE_UNPICKLER = re.compile(r"\b(?:_?pickle)\.Unpickler\s*\(")
 # parse) and the bare module names (minidom / pulldom / ElementTree after a
 # from-import) are covered.
 RE_XML_PARSE = re.compile(
-    r"\b(?:xml\.etree\.(?:c?ElementTree)\.(?:parse|fromstring)"
+    r"\b(?:xml\.etree\.(?:c?ElementTree)\.(?:parse|fromstring|XML|iterparse)"
     r"|xml\.dom\.minidom\.(?:parse|parseString)"
     r"|xml\.dom\.pulldom\.(?:parse|parseString)"
     r"|xml\.sax\.(?:parse|parseString|make_parser)"
     r"|xml\.parsers\.expat\.ParserCreate"
-    r"|ElementTree\.(?:parse|fromstring)"
+    r"|ElementTree\.(?:parse|fromstring|XML|iterparse)"
     r"|minidom\.(?:parse|parseString)"
     r"|pulldom\.(?:parse|parseString)"
     r"|expat\.ParserCreate)\s*\(",
@@ -119,6 +119,15 @@ _REAJAVA_STATIC_ARG = re.compile(
 RE_JAVA_XMLDECODER = re.compile(
     r"""\bXMLDecoder\s*\(""",
 )
+# Jackson's default typing embeds polymorphic type metadata in `@class`
+# properties that Jackson instantiates on deserialization (CWE-502): a
+# crafted payload for enableDefaultTyping/activateDefaultTyping becomes
+# arbitrary class instantiation, the Java counterpart of readObject.
+# disableDefaultTyping()/deactivateDefaultTyping() switch the feature OFF and
+# stay quiet.
+RE_JAVA_JACKSON_TYPING = re.compile(
+    r"\.(?:enableDefaultTyping|activateDefaultTyping)\s*\(",
+)
 # node-serialize's unserialize() deserializes a serialized function graph by
 # eval'ing the payload (CVE-2017-5941): any non-literal payload is arbitrary
 # code execution, the JS counterpart of Python pickle. PHP's unserialize()
@@ -137,6 +146,11 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
         return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
                         line=line, message=msg, fix=fix, dimension="deserialization")
+
+    # The Jackson default-typing rule is Java-specific; like injection.py, the
+    # .java extension gate keeps it from mis-firing on other languages that
+    # happen to call a same-named method.
+    ext = source_path.rsplit(".", 1)[-1].lower() if "." in source_path else ""
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -208,6 +222,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Java)",
                                 "XMLDecoder 从 XML 实例化任意 Java 类",
                                 "改用安全的解析器 (StAX/SAX) 并验证 DTD/类型"))
+        # Jackson default typing: @class metadata drives polymorphic type
+        # instantiation on deserialization.  Only meaningful in Java sources.
+        if ext == "java" and RE_JAVA_JACKSON_TYPING.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Jackson)",
+                                "enableDefaultTyping/activateDefaultTyping 反序列化类型元数据可实例化任意类",
+                                "为 @class 属性配置 allowlist 或关闭默认类型绑定"))
         if RE_NODE_UNSERIALIZE.search(raw):
             findings.append(hit(lineno, "deser.pickle", "unserialize 反序列化",
                                 "unserialize 反序列化负载并重建对象，可执行任意代码 (CVE-2017-5941)",

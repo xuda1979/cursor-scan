@@ -250,6 +250,40 @@ class TestXxeParsers:
         assert _py("import xml.etree.ElementTree as ET\nroot = ET.parse(path)\n") == []
 
 
+class TestXxeXmlAndIterparse:
+    """ElementTree.XML() (string constructor) and iterparse() (streaming pull
+    parser) are the same DTD-resolving stdlib sinks as parse/fromstring
+    (CWE-611). The `ET.` alias spelling stays quiet like the other alias
+    forms, since ET is a common alias for safe lxml trees too."""
+
+    def test_fullname_xml_flags(self):
+        assert _py("xml.etree.ElementTree.XML(xml_text)\n") == [("deser.xxe", "critical")]
+
+    def test_fullname_c_elementtree_xml_flags(self):
+        assert _py("xml.etree.cElementTree.XML(xml_text)\n") == [("deser.xxe", "critical")]
+
+    def test_fullname_iterparse_flags(self):
+        assert _py("for e, el in xml.etree.ElementTree.iterparse(path): pass\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_bare_elementtree_xml_after_from_import_flags(self):
+        assert _py("from xml.etree import ElementTree\nroot = ElementTree.XML(xml_text)\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_bare_elementtree_iterparse_after_from_import_flags(self):
+        assert _py("from xml.etree import ElementTree\n"
+                   "for e, el in ElementTree.iterparse(path): pass\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_et_alias_is_quiet(self):
+        # Same alias ambiguity as ET.parse: not a fully-qualified sink.
+        assert _py("import xml.etree.ElementTree as ET\nroot = ET.XML(xml_text)\n") == []
+
+    def test_elementtree_class_name_is_quiet(self):
+        # The class name itself, not a call, and no `(` call.
+        assert _py("ElementTree.XML\n") == []
+
+
 class TestNodeVmRun:
     """Node's vm.runIn*Context executes a source string -- the JS counterpart
     of eval. Dynamic source flags as deser.eval; literals and other vm API
@@ -554,4 +588,39 @@ class TestJavaXxe:
         # fix; a builder line that only constructs the factory still flags for
         # review (the negligible-protection form is out of scope here).
         assert len(self._java("DocumentBuilderFactory.newInstance();\n")) == 1
+
+
+class TestJavaJacksonTyping:
+    """Jackson's default typing embeds polymorphic @class metadata that Jackson
+    instantiates on deserialization (CWE-502), the Java counterpart of
+    readObject. enableDefaultTyping/activateDefaultTyping flag; the disable
+    forms switch bundling OFF and stay quiet, and shutdown-overwrite calls are
+    not leaks."""
+
+    def _java(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("X.java", code)]
+
+    def test_enable_default_typing_flags(self):
+        assert self._java("mapper.enableDefaultTyping();\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_activate_default_typing_flags(self):
+        assert self._java("om.activateDefaultTyping(ptv, DefaultTyping.NON_FINAL);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_config_line_forward_declaration_flags(self):
+        # The dotted call with arguments still flags; only OFF switches are
+        # treated as safe configuration.
+        assert self._java("ObjectMapper om = new ObjectMapper();\n"
+                          "om.activateDefaultTyping(ptv);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_disable_default_typing_is_quiet(self):
+        # Switching the feature off is the mitigation, not the vulnerability.
+        assert self._java("mapper.disableDefaultTyping();\n") == []
+
+    def test_deactivate_default_typing_is_quiet(self):
+        # Alias of the OFF switch for the activate() counterpart.
+        assert self._java("ObjectMapper om = new ObjectMapper();\n"
+                          "om.deactivateDefaultTyping();\n") == []
 

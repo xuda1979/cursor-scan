@@ -96,14 +96,14 @@ def bad_copy(tmp_path):
 
 
 class TestIgnoreIntegration:
-    """scan_bad yields 134 findings; sql_concat x14, crypto.* x9, xss medium x3."""
+    """scan_bad yields 140 findings; sql_concat x14, crypto.* x9, xss medium x3."""
 
     def test_cli_ignore_reduces_findings(self, bad_copy, capsys):
         rc = main([bad_copy, "--no-save", "--ignore", "injection.sql_concat",
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1  # high/critical findings remain, --fail-on high gate holds
-        assert "发现 120 个问题" in out  # 134 - 14 suppressed
+        assert "发现 126 个问题" in out  # 140 - 14 suppressed
         assert "已忽略 14 个发现" in out
 
     def test_glob_ignore_suppresses_rule_family(self, bad_copy, capsys):
@@ -111,7 +111,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "发现 125 个问题" in out  # 134 - 9 crypto
+        assert "发现 131 个问题" in out  # 140 - 9 crypto
         assert "已忽略 9 个发现" in out
 
     def test_rule_file_line_form(self, bad_copy, capsys):

@@ -18,4 +18,20 @@ public class UnsafeDeser {
     ObjectInputStream ois = new ObjectInputStream(in);
     return ois.readObject("CONFIG");
   }
+
+  Object polymorphicWire(ObjectMapper mapper, Object raw) throws Exception {
+    mapper.enableDefaultTyping();
+    return mapper.readValue(raw, Stock.class);
+  }
+
+  Object polymorphicPublishers(ObjectMapper om, byte[] bytes) throws Exception {
+    om.activateDefaultTyping(om.getPolymorphicTypeValidator(),
+                             DefaultTyping.NON_FINAL);
+    return om.readValue(bytes);
+  }
+
+  Object safeMapper(ObjectMapper mapper) throws Exception {
+    mapper.disableDefaultTyping();
+    return mapper;
+  }
 }

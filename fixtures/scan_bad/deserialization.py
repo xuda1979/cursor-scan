@@ -88,3 +88,23 @@ def parse_client_xml(data: bytes):
     return ElementTree.fromstring(data)
 
 
+def build_element_from_document(data: str):
+    return xml.etree.ElementTree.XML(data)
+
+
+def ingest_streaming_xml(path: str):
+    for event, elem in xml.etree.ElementTree.iterparse(path):
+        pass
+
+
+def rebuild_tree_from_payload(data: str):
+    from xml.etree import ElementTree
+    return ElementTree.XML(data)
+
+
+def walk_incoming_xml(path: str):
+    from xml.etree import ElementTree
+    for event, elem in ElementTree.iterparse(path):
+        pass
+
+
