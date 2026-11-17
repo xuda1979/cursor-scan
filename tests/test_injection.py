@@ -378,6 +378,45 @@ class TestKotlinShellConcat:
         assert self._reg('Runtime.getRuntime().exec("ls -la")\n') == []
 
 
+class TestJSSqlConcatRegex:
+    """Regex-layer lock for the JS DB-driver receivers: node-postgres /
+    mysql2 / better-sqlite3 style ``pool/connection/client/conn.query`` and
+    chained ``db.prepare(...)``/``db.exec(...)`` with a SQL-keyword literal
+    concat flag ``injection.sql_concat``; parameterized, static and
+    Express data-getter forms stay quiet."""
+
+    def test_pool_query_concat_flags(self):
+        assert _reg("pool.query('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_connection_query_concat_flags(self):
+        assert _reg("connection.query('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_client_query_concat_flags(self):
+        assert _reg("client.query('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_pg_pool_query_concat_flags(self):
+        assert _reg("pg.pool.query('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_prepare_chain_concat_flags(self):
+        assert _reg("db.prepare('SELECT * FROM u WHERE id = ' + id).run(id)\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_parametrized_pool_query_is_quiet(self):
+        assert _reg("pool.query('SELECT * FROM users WHERE id = ?', [id])\n",
+                    "x.js") == []
+
+    def test_static_pool_query_is_quiet(self):
+        assert _reg("pool.query('SELECT * FROM users')\n", "x.js") == []
+
+    def test_req_query_is_quiet(self):
+        assert _reg("req.query('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == []
+
+
 class TestCrossExtensionSilence:
     """The new regexes must not fire on Python/JS safe forms, and the
     Go/C#/Kotlin patterns must not leak onto other languages' files."""

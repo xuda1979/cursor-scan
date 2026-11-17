@@ -37,7 +37,7 @@ RE_SQL_FSTRING_CALL_PY = re.compile(
     re.I,
 )
 RE_SQL_CONCAT_JS = re.compile(
-    r"\b(db\.(query|run|all|get)|mysql\.query|pg\.query|knex\.raw|sequelize\.query)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
+    r"\b(db\.(query|run|all|get|prepare|exec)|(?:pg|mysql)\.(?:pool\.)?query|(?:pool|connection|client|conn)\.query|better-sqlite3\.(?:prepare|exec)|mysql\.query|knex\.raw|sequelize\.query|prisma\.\w+)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
     re.I,
 )
 # Assignment form: JS `const q = 'SELECT ...' + input` where the SQL literal

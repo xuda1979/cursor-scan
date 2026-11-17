@@ -171,6 +171,86 @@ class TestJSTemplateLiteralConcat:
         assert finds == []
 
 
+class TestJSSqlDriverReceivers:
+    """DB-driver receiver coverage (node-postgres/mysql2/better-sqlite3):
+    ``pool/connection/client/conn.query`` and the ``db.prepare(...)`` chain
+    are SQL entry points, so a SQL-keyword literal concat at the call flags
+    at both the AST and regex layers.  Express/Fastify data getters
+    (``req.query``, ``res.get``, ``app.get``) are not SQL entry points and
+    must stay quiet, as must parameterized and static calls."""
+
+    def test_pool_query_concat_flags(self):
+        finds = _js("pool.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("injection.sql_concat", "critical")]
+
+    def test_connection_query_concat_flags(self):
+        finds = _js("connection.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_client_query_concat_flags(self):
+        finds = _js("client.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_conn_query_concat_flags(self):
+        finds = _js("conn.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_await_pool_query_concat_flags(self):
+        finds = _js("await pool.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pg_pool_query_concat_flags(self):
+        finds = _js("pg.pool.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_prepare_chain_concat_flags(self):
+        # The concat sits in the inner db.prepare(...) call of the chain.
+        finds = _js("db.prepare('SELECT * FROM users WHERE id = ' + id).run(id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_db_exec_concat_flags(self):
+        finds = _js("db.exec('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_prisma_query_raw_concat_flags(self):
+        finds = _js("prisma.$queryRaw('SELECT * FROM users WHERE id = ' + id)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pool_query_template_concat_flags(self):
+        finds = _js("pool.query(`SELECT * FROM users WHERE id = ${id}`)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_pool_query_parameterized_is_quiet(self):
+        finds = _js("pool.query('SELECT * FROM users WHERE id = ?', [id])\n")
+        assert finds == []
+
+    def test_pool_query_static_is_quiet(self):
+        finds = _js("pool.query('SELECT * FROM users')\n")
+        assert finds == []
+
+    def test_req_query_is_not_a_sql_sink(self):
+        # Express req.query is a URL-query-parameter object, not SQL.
+        finds = _js("req.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert finds == []
+
+    def test_request_query_is_not_a_sql_sink(self):
+        finds = _js("request.query('SELECT * FROM users WHERE id = ' + id)\n")
+        assert finds == []
+
+    def test_res_get_is_not_a_sql_sink(self):
+        finds = _js("res.get('X-Frame-Options')\n")
+        assert finds == []
+
+    def test_app_get_is_not_a_sql_sink(self):
+        finds = _js("app.get('/users', (req, res) => {})\n")
+        assert finds == []
+
+    def test_router_all_is_not_a_sql_sink(self):
+        finds = _js("router.all('*', handler)\n")
+        assert finds == []
+
+
 class TestJSShellSlotAwareConcat:
     """exec-family shell injection is slot-aware: a concat in the *command
     string* reaches a shell (exec/execSync always; spawn/Promise-based

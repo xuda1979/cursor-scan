@@ -622,7 +622,11 @@ def analyze_jsts(path, src, findings):
                 or fn.endswith(".execFile")
                 or fn.endswith(".execSync") or fn.endswith(".execFileSync")
                 or fn.endswith(".spawnSync")
-                or fn.endswith(".fork")):
+                or fn.endswith(".fork")) \
+                and not fn.startswith("db."):
+            # A ``db.`` receiver is a SQL executor (better-sqlite3
+            # ``db.exec`` / ``db.prepare``), never a child_process shell
+            # entry, so it is excluded here; the SQL branch above owns it.
             first = _first_positional(call, bsrc)
             cmd = first[0] if first is not None else ""
             cmd_dynamic = _has_concat(cmd)
@@ -758,9 +762,15 @@ def _js_plain_string(txt: str) -> str | None:
 
 def _fn_is_db_query(fn: str) -> bool:
     fn = fn.lower()
-    return any(k in fn for k in ("db.query", ".query(", ".run(", ".all(", ".get(",
-                                 "mysql.query", "pg.query", "knex.raw", "sequelize.query",
-                                 "prisma.")) or fn.endswith(".execute")
+    # Express / Fastify request and route objects expose .query (URL-query
+    # params), .get (response headers) and .all (route registration): those
+    # are data getters, never SQL entry points, so their receivers are
+    # excluded before the suffix matches can swallow a SQL-keyword concat.
+    if fn.startswith(("req.", "request.", "res.", "response.", "router.", "app.")):
+        return False
+    return any(k in fn for k in ("db.query", "db.exec", "mysql.query", "pg.query",
+                                 "knex.raw", "sequelize.query", "prisma.")) \
+        or fn.endswith((".query", ".run", ".all", ".get", ".execute", ".prepare"))
 
 
 def _js_external(args: str) -> bool:
