@@ -6,7 +6,9 @@ Go (`+` concat / fmt.Sprintf verbs), C# (`+` concat / `$"..."` interpolated
 templates), Kotlin (`+` concat), Rust (`format!` / `format_args!` /
 `fmt::format` interpolation, `+` concat, `Command::new("sh").arg("-c")`)
 and Perl (DBI double-quoted `$var` interpolation / `.` concat,
-single-string `system`/`exec`, backticks, `qx{}`)
+single-string `system`/`exec`, backticks, `qx{}`) and Lua (`..` concat /
+`string.format` verbs into LuaSQL / LuaSQLite3 receivers, `os.execute` /
+`io.popen` command strings)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -761,6 +763,86 @@ class TestPerlShellConcat:
         assert self._reg('qx{git log --oneline}\n') == []
 
 
+class TestLuaSqlConcat:
+    """Regex-layer lock for LuaSQL / LuaSQLite3 receivers (conn:execute /
+    db:execute / db:exec): a SQL-keyword literal spliced with Lua's `..`
+    concatenation operator or built through string.format() with a printf
+    verb flags ``injection.sql_concat``; static literals, parameterized `?`
+    placeholders and non-receiver assignments stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.lua", code)]
+
+    def test_colon_execute_concat_flags(self):
+        assert self._reg(
+            'local res = conn:execute("SELECT * FROM users WHERE name = \'" .. name .. "\'")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dot_exec_exec_string_format_flags(self):
+        assert self._reg(
+            'db.exec(string.format("DELETE FROM logs WHERE id = %s", id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_colon_exec_string_format_flags(self):
+        assert self._reg(
+            'conn:execute(string.format("UPDATE accounts SET balance = %d WHERE id = 1", amt))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_execute_concat_flags(self):
+        assert self._reg(
+            'db:execute("SELECT * FROM t " .. where)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_placeholder_parameterized_is_quiet(self):
+        assert self._reg(
+            'local res = conn:execute("SELECT * FROM users WHERE name = ?", name)\n'
+        ) == []
+
+    def test_db_exec_placeholder_is_quiet(self):
+        assert self._reg(
+            'db:exec("DELETE FROM logs WHERE id = ?", id)\n'
+        ) == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg('conn:execute("SELECT COUNT(*) FROM logs")\n') == []
+
+    def test_static_concat_to_local_is_quiet(self):
+        # Concatenating two constants into a local is not a driver call; the
+        # rule keys on the receiver argument, not on any `..` on the line.
+        assert self._reg('local eq = "SELECT * FROM t WHERE a = " .. "1"\n') == []
+
+
+class TestLuaShellConcat:
+    """Regex-layer lock for Lua shell execution: os.execute / io.popen called
+    with a command string spliced together with `..` concatenation or built
+    through string.format() with a printf verb flag ``injection.shell_concat``;
+    static command strings stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.lua", code)]
+
+    def test_os_execute_concat_flags(self):
+        assert self._reg(
+            'os.execute("rm -rf /tmp/" .. dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_io_popen_string_format_flags(self):
+        assert self._reg(
+            'local out = io.popen(string.format("ls -la %s", dir)):read("*a")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_os_execute_string_format_flags(self):
+        assert self._reg(
+            'os.execute(string.format("ping -c 1 %s", host))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_os_execute_is_quiet(self):
+        assert self._reg('os.execute("true")\n') == []
+
+    def test_static_io_popen_is_quiet(self):
+        assert self._reg('local when = io.popen("date"):read("*a")\n') == []
+
+
 class TestJSSqlConcatRegex:
     """Regex-layer lock for the JS DB-driver receivers: node-postgres /
     mysql2 / better-sqlite3 style ``pool/connection/client/conn.query`` and
@@ -900,6 +982,28 @@ class TestCrossExtensionSilence:
 
     def test_perl_static_system_is_quiet(self):
         assert self._reg('system("true")\n', "x.pl") == []
+
+    def test_lua_receiver_silent_on_go_file(self):
+        # LuaSQL's ``conn:execute("..." .. x)`` only fires for .lua files;
+        # on .go the SQL-concat rule requires the db.Query-family receivers.
+        assert self._reg(
+            'local res = conn:execute("SELECT * FROM t WHERE id = " .. id)\n',
+            "x.go") == []
+
+    def test_lua_shell_concat_silent_on_pl_file(self):
+        # os.execute("..." .. x) is a Lua form; the Perl shell rule keys on
+        # `$` interpolation, so a `.lua` line is silent on a .pl path.
+        assert self._reg(
+            'os.execute("rm -rf /tmp/" .. dir)\n',
+            "x.pl") == []
+
+    def test_lua_parameterized_query_is_quiet(self):
+        assert self._reg(
+            'conn:execute("SELECT * FROM users WHERE name = ?", name)\n',
+            "x.lua") == []
+
+    def test_lua_static_os_execute_is_quiet(self):
+        assert self._reg('os.execute("true")\n', "x.lua") == []
 
 
 class TestPythonFStringSqlConcat:

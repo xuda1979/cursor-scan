@@ -338,6 +338,34 @@ RE_SHELL_CONCAT_PL = re.compile(
     r"|\bqx\s*[^a-zA-Z0-9_']\s*[^$]*?\$[a-zA-Z_{@]",
     re.I,
 )
+# Lua (.lua): LuaSQL receivers (conn:execute / db:execute / db.exec) and
+# LuaSQLite3 (db:exec / db:execute) handed a query literal spliced together
+# with the `..` concatenation operator (Lua's string concat), or built
+# through string.format("...%s", v) where the printf verb is baked into a
+# SQL-keyword literal (the Go fmt.Sprintf / Java String.format analog);
+# both splice runtime values straight into the query sent to the driver.
+# Static literals, parameterized ? placeholders and non-receiver assignments
+# stay quiet.  Shell forms: os.execute / io.popen with a `..`-concatenated
+# or string.format-built command string; static commands with nothing to
+# interpolate stay quiet.
+RE_SQL_CONCAT_LUA = re.compile(
+    r"\b[a-zA-Z_]\w*\s*[:.]\s*exec(?:ute)?\s*\(\s*(?:"
+    + _SQL_STR
+    + r")\s*\.\.\s*"
+    r"|\b[a-zA-Z_]\w*\s*[:.]\s*exec(?:ute)?\s*\(\s*string\.format\s*\(\s*(?:"
+    r"\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\""
+    r"|'[^']*(?:" + _SQL_KW + r")[^']*%[a-zA-Z][^']*'"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_LUA = re.compile(
+    r"\b(?:os\.execute|io\.popen)\s*\(\s*(?:"
+    r"\"[^\"]*\"\s*\.\.\s*"
+    r"|'[^']*'\s*\.\.\s*"
+    r"|string\.format\s*\(\s*(?:\"[^\"]*%[a-zA-Z][^\"]*\"|'[^']*%[a-zA-Z][^']*')"
+    r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -428,6 +456,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if ext == "pl" and RE_SHELL_CONCAT_PL.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Lua `..` concatenation / string.format-verb SQL into LuaSQL /
+        # LuaSQLite3 receivers, and os.execute / io.popen shell commands.
+        if ext == "lua" and RE_SQL_CONCAT_LUA.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if ext == "lua" and RE_SHELL_CONCAT_LUA.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
