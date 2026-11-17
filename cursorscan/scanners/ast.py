@@ -604,7 +604,10 @@ def analyze_jsts(path, src, findings):
         # shell: exec/spawn with shell and concat.  execSync / spawnSync /
         # fork are the synchronous / child forms of the same commands and
         # carry the identical injection surface; ``require('child_process')
-        # .execSync(...)`` surfaces as fn ending in ``.execSync``.
+        # .execSync(...)`` surfaces as fn ending in ``.execSync``.  execFile
+        # is the argv-form sibling: it takes an executable *plus* an argv
+        # array, so a concat only reaches a shell via shell:true or an
+        # ``sh -c``-style command line.
         #
         # Which slot the concat lands in decides whether a shell is involved:
         # exec/execSync always interpret their string command in a shell,
@@ -613,9 +616,12 @@ def analyze_jsts(path, src, findings):
         # *argument array* of a plain spawn reaches the child as a separate
         # argv entry (no metacharacter expansion), so it must not fire shell
         # injection -- only shell-involved or concat-built command strings.
-        if (fn in ("exec", "execa", "spawn", "execSync", "spawnSync", "fork")
+        if (fn in ("exec", "execa", "spawn", "execFile", "execSync", "execFileSync",
+                   "spawnSync", "fork")
                 or fn.endswith(".exec") or fn.endswith(".spawn")
-                or fn.endswith(".execSync") or fn.endswith(".spawnSync")
+                or fn.endswith(".execFile")
+                or fn.endswith(".execSync") or fn.endswith(".execFileSync")
+                or fn.endswith(".spawnSync")
                 or fn.endswith(".fork")):
             first = _first_positional(call, bsrc)
             cmd = first[0] if first is not None else ""

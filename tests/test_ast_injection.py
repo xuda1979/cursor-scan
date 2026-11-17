@@ -188,6 +188,36 @@ class TestJSShellSlotAwareConcat:
         assert [(f.rule_id, f.line) for f in finds] == [
             ("injection.shell_concat", 1)]
 
+    def test_exec_file_shell_true_dynamic_flags(self):
+        # execFile is the argv-form sibling: a dynamic first-arg command
+        # with shell:true reaches a shell and must flag.
+        finds = _js("execFile('ls ' + d, [], { shell: true })\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_exec_file_sync_shell_true_dynamic_flags(self):
+        finds = _js("execFileSync('ls ' + d, [], { shell: true })\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_exec_file_shell_false_is_quiet(self):
+        finds = _js("execFile('ls ' + d, [], { shell: false })\n")
+        assert finds == []
+
+    def test_exec_file_sh_dash_c_dynamic_flags(self):
+        finds = _js("execFile('sh', ['-c', 'ls ' + dir])\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_exec_file_receiver_flags(self):
+        finds = _js("cp.execFile('ls ' + d, [], { shell: true })\n")
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_exec_file_static_is_quiet(self):
+        # Static argv with shell:true: no concat-built command, quiet.
+        finds = _js("execFile('ping', ['-c', '3', 'h'], { shell: true })\n")
+        assert finds == []
+
     def test_spawn_single_string_command_flags(self):
         # A single string to spawn goes through a shell for parsing.
         finds = _js('spawn("ping " + host)\n')
