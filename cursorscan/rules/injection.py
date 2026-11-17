@@ -14,7 +14,7 @@ from .helpers import code_lines
 
 # Regex fallbacks ------------------------------------------------------------
 RE_SQL_CONCAT_PY = re.compile(
-    r"\b(execute|executemany|executescript|cursor\.execute|db\.query|db\.execute|query_all|query_one|run_query|cursor3\.execute|fetchval|fetchrow|fetch|fetchmany)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
+    r"\b(execute|executemany|executescript|text|cursor\.execute|db\.query|db\.execute|query_all|query_one|run_query|cursor3\.execute|fetchval|fetchrow|fetch|fetchmany)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
     re.I,
 )
 # Assignment form: query = f"... {user_input} ..." followed later by execute(query)
@@ -31,13 +31,24 @@ RE_SQL_FSTRING_ASSIGN = re.compile(
 # [^"'] class would break on embedded opposite quotes, e.g.
 # f"DELETE ... WHERE owner = '{owner}'").
 RE_SQL_FSTRING_CALL_PY = re.compile(
-    r"\b(?:execute|executemany|executescript|query|query_all|query_one|run_query|cursor\.execute|db\.execute|fetchval|fetchrow|fetch|fetchmany)\s*\(\s*(?:"
+    r"\b(?:execute|executemany|executescript|text|query|query_all|query_one|run_query|cursor\.execute|db\.execute|fetchval|fetchrow|fetch|fetchmany)\s*\(\s*(?:"
     r"f\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\{[^}]+\}"
     r"|f'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*\{[^}]+\})",
     re.I,
 )
+# Shared building blocks for the cross-language SQL patterns below: a quoted
+# string containing a SQL keyword, matched with the same-quote closure (a
+# double-quoted string may legally contain ' and vice-versa, so the classic
+# [^"'] class would break on embedded quotes), and the SQL keyword alternation.
+_SQL_KW = "(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)"
+_SQL_STR = (
+    '"(?:[^"]*' + _SQL_KW + '[^"]*)"|'
+    "'(?:[^']*" + _SQL_KW + "[^']*)'"
+)
 RE_SQL_CONCAT_JS = re.compile(
-    r"\b(db\.(query|run|all|get|prepare|exec)|(?:pg|mysql)\.(?:pool\.)?query|(?:pool|connection|client|conn)\.query|better-sqlite3\.(?:prepare|exec)|mysql\.query|knex\.raw|sequelize\.query|prisma\.\w+)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
+    r"\b(db\.(?:query|run|all|get|prepare|exec|execute)|(?:pg|mysql)\.(?:pool\.)?query|(?:pool|connection|client|conn)\.(?:query|execute)|mysql2\.(?:query|execute)|better-sqlite3\.(?:prepare|exec)|knex\.raw|sequelize\.query|prisma\.\w+)\s*\(\s*(?:"
+    + _SQL_STR
+    + r")\s*\+|`.*SELECT.*\$\{",
     re.I,
 )
 # Assignment form: JS `const q = 'SELECT ...' + input` where the SQL literal
@@ -69,17 +80,6 @@ RE_SHELL_FSTRING_PY = re.compile(
     r"f\"[^\"]*\{[^}]+\}"
     r"|f'[^']*\{[^}]+\})",
     re.I,
-)
-# Cross-language SQL concatenation.
-#
-# Shared building blocks: a quoted string containing a SQL keyword, matched
-# with the same-quote closure (a double-quoted string may legally contain
-# ' and vice-versa, so the classic [^"'] class would break on embedded
-# quotes), and the SQL keyword alternation.
-_SQL_KW = "(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)"
-_SQL_STR = (
-    '"(?:[^"]*' + _SQL_KW + '[^"]*)"|'
-    "'(?:[^']*" + _SQL_KW + "[^']*)'"
 )
 # PHP builds SQL strings with the `.` concatenation operator; the DB entry
 # points are mysqli_query($conn, ...) / pg_query($conn, ...) and the
@@ -145,8 +145,8 @@ RE_SHELL_CONCAT_JAVA = re.compile(
 # quiet.  CommandContext shifts the context-first argument, skipped by the
 # optional ``[^,]+,\s*`` group.
 RE_SQL_CONCAT_GO = re.compile(
-    r"\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?(?:" + _SQL_STR + r")\s*\+"
-    r"|\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?fmt\.Sprintf\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\"",
+    r"\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?(?:" + _SQL_STR + r")\s*\+"
+    r"|\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?fmt\.Sprintf\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\"",
     re.I,
 )
 RE_SHELL_CONCAT_GO = re.compile(

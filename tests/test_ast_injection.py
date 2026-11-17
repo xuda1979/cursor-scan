@@ -204,6 +204,33 @@ class TestPythonAsyncSqlDrivers:
         assert finds == []
 
 
+class TestPythonSqlAlchemyText:
+    """SQLAlchemy ``text(...)`` is a SQL-string entry point: a concatenated
+    or f-string-interpolated SQL literal fed to text() must flag exactly as
+    the execute family does, while parameterized (:name) and static forms
+    stay quiet."""
+
+    def test_text_concat_flags(self):
+        finds = _py("q = text('SELECT * FROM users WHERE id = ' + uid)\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_text_fstring_flags(self):
+        finds = _py('q = text(f"SELECT * FROM t WHERE id = {uid}")\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_text_static_is_quiet(self):
+        finds = _py("q = text('SELECT 1')\n")
+        assert finds == []
+
+    def test_text_parameterized_is_quiet(self):
+        finds = _py("q = text('SELECT * FROM t WHERE id = :id')\n")
+        assert finds == []
+
+    def test_session_execute_static_text_is_quiet(self):
+        finds = _py("session.execute(text('SELECT * FROM t'))\n")
+        assert finds == []
+
+
 class TestJSTemplateLiteralConcat:
     def test_db_query_template_literal_flags(self):
         finds = _js("db.query(`SELECT * FROM users WHERE id = ${id}`);\n")

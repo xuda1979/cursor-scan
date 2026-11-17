@@ -280,7 +280,7 @@ def analyze_python(path, src, findings):
                         ".fetchval", ".fetchrow", ".fetchmany", ".fetch")) \
                 or fn in ("cursor.execute", "db.execute", "conn.execute",
                           "execute", "executemany", "cursor3.execute",
-                          "mysql.cursor.execute"):
+                          "mysql.cursor.execute", "text"):
             if _contains_sql(args) and _has_concat(args):
                 findings.append(_ev(
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,

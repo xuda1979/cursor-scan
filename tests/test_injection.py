@@ -213,6 +213,23 @@ class TestGoSqlConcat:
     def test_sprintf_without_sql_keyword_is_quiet(self):
         assert self._reg('db.Query(fmt.Sprintf("version %s", ver))\n') == []
 
+    def test_raw_plus_concat_flags(self):
+        assert self._reg(
+            'db.Raw("SELECT * FROM users WHERE id = " + uid).Scan(&u)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_sprintf_format_verb_flags(self):
+        assert self._reg(
+            'db.Raw(fmt.Sprintf("SELECT %s FROM accounts", cols)).Scan(&a)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_parameterized_is_quiet(self):
+        assert self._reg(
+            'db.Raw("SELECT * FROM users WHERE id = ?", uid).Scan(&u)\n') == []
+
+    def test_raw_static_is_quiet(self):
+        assert self._reg('db.Raw("SELECT 1")\n') == []
+
 
 class TestGoShellConcat:
     def _reg(self, code: str):
@@ -414,6 +431,40 @@ class TestJSSqlConcatRegex:
 
     def test_req_query_is_quiet(self):
         assert _reg("req.query('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == []
+
+    def test_client_execute_concat_flags(self):
+        assert _reg("client.execute('SELECT * FROM users WHERE id = ' + id, [])\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_db_execute_embedded_opposite_quote_flags(self):
+        # Double-quoted SQL literal containing an embedded single quote chain,
+        # exactly the shape that a naive [^"'] char class would break on.
+        assert _reg('db.execute("UPDATE users SET name = \'" + n + "\' WHERE id = 1")\n',
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_mysql2_execute_concat_flags(self):
+        assert _reg("mysql2.execute('SELECT * FROM orders WHERE id = ' + id, [])\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_pool_execute_concat_flags(self):
+        assert _reg("pool.execute('SELECT * FROM users WHERE id = ' + id)\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_mysql2_query_concat_flags(self):
+        assert _reg("mysql2.query('INSERT INTO logs (msg) VALUES (' + msg + ')')\n",
+                    "x.js") == [("injection.sql_concat", 1)]
+
+    def test_execute_parameterized_is_quiet(self):
+        assert _reg("db.execute('SELECT * FROM users WHERE id = ?', [id])\n",
+                    "x.js") == []
+
+    def test_execute_static_is_quiet(self):
+        assert _reg("db.execute('SELECT * FROM users')\n", "x.js") == []
+
+    def test_router_execute_is_quiet(self):
+        # Express router dispatch is not a SQL sink.
+        assert _reg("router.execute('SELECT * FROM users WHERE id = ' + id)\n",
                     "x.js") == []
 
 
