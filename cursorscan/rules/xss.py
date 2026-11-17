@@ -21,8 +21,15 @@ from .helpers import code_lines
 # belongs here too; the empty-argument ``.html()`` getter form (a read) and
 # ``.innerHTML`` reads are left alone.  Compound ``+=`` writes are sinks as
 # well; a bare ``+`` (``a.innerHTML + b`` is a read) stays quiet.
+#
+# No ``\b`` before the dot: the receiver is often a call result
+# (``getEl('t').outerHTML``) and ``)``/``]`` are non-word characters, so a
+# leading word boundary would silently skip those sinks.  The trailing ``\b``
+# (``innerHTMLX`` never matches) and the write/call guard ``(?:+=|[=(.])``
+# (reads like ``a.innerHTML + b`` or ``const x = el.outerHTML;`` stay quiet)
+# keep the pattern tight.
 RE_DOM_SINK = re.compile(
-    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*(?:\+=|[=(.])"
+    r"\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*(?:\+=|[=(.])"
     r"|\.html\s*\(\s*[^)]",
     re.I,
 )

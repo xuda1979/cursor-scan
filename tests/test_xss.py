@@ -46,6 +46,33 @@ class TestDomSink:
         # A bare `+` reads the current value into a larger expression.
         assert _analyze("const s = a.innerHTML + b;\n") == []
 
+    def test_call_result_receiver_outer_html_flags(self):
+        # The receiver is a function call result; the closing `)` sits before
+        # the `.outerHTML` — a word boundary would have missed this.
+        found = _analyze("document.getElementById('t').outerHTML = html;\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_call_result_receiver_inner_html_flags(self):
+        found = _analyze("queryCard().innerHTML = html;\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_call_chain_receiver_insert_adjacent_html_flags(self):
+        found = _analyze(
+            "document.querySelector('#rows').insertAdjacentHTML('beforeend', html);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_indexed_receiver_inner_html_flags(self):
+        # `]` is non-word too — `sections[0].innerHTML = html` must fire.
+        found = _analyze("sections[0].innerHTML = html;\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_call_result_receiver_read_is_quiet(self):
+        # Reading the property back from a call result is still a read.
+        assert _analyze("const h = getEl('t').outerHTML;\n") == []
+
+    def test_call_result_receiver_plus_read_is_quiet(self):
+        assert _analyze("const s = getEl('t').innerHTML + b;\n") == []
+
     def test_jquery_html_setter_is_a_sink(self):
         # jQuery's .html() is an innerHTML setter; a DOM-XSS sink.
         found = _analyze("$('#box').html(userInput);\n")

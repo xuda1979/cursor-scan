@@ -66,3 +66,15 @@ function loadExtra(version) {
 function loadKnownPlugin() {
   $.getScript("https://cdn.example.com/plugin.js");
 }
+
+function replaceBanner(html) {
+  document.getElementById("banner").outerHTML = html;
+}
+
+function updateCard(html) {
+  queryCard().innerHTML = html;
+}
+
+function insertRow(html) {
+  document.querySelector("#rows").insertAdjacentHTML("beforeend", html);
+}
