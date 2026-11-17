@@ -313,6 +313,31 @@ RE_SHELL_CONCAT_RS = re.compile(
     r")",
     re.I,
 )
+# Perl (.pl): DBI receivers (prepare / do / selectrow_* / selectall_* /
+# selectcol_arrayref) handed a double-quoted query literal containing `$var`
+# interpolation (double-quoted Perl strings interpolate scalars and arrays at
+# runtime), or a query literal built with the `.` concatenation operator
+# (single- or double-quoted).  Parameterized `?` placeholders bound through
+# execute()/do() stay quiet.  Shell forms: single-string system/exec calls
+# (one-argument form routes through the shell), backtick operators and
+# qx{...} with an interpolated `$var` command string.  Argument-list
+# system("ls", $dir) and static single-string commands stay quiet, and
+# single-quoted strings never interpolate in Perl, so their `$var` is literal.
+RE_SQL_CONCAT_PL = re.compile(
+    r"\$\w+\s*->\s*(?:prepare|do|selectrow_array|selectrow_hashref|"
+    r"selectall_arrayref|selectall_hashref|selectcol_arrayref)\s*\(\s*"
+    r"(?:"
+    r'"[^"]*' + _SQL_KW + r'[^"]*\$'
+    r"|(?:" + _SQL_STR + r")\s*\."
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_PL = re.compile(
+    r"\b(?:system|exec)\s*\(?\s*\"[^\"$]*\$[a-zA-Z_{@]"
+    r"|`[^`]*\$[a-zA-Z_{@]"
+    r"|\bqx\s*[^a-zA-Z0-9_']\s*[^$]*?\$[a-zA-Z_{@]",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -395,6 +420,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if ext == "rs" and RE_SHELL_CONCAT_RS.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Perl DBI double-quoted `$var` interpolation and `.` concatenation SQL,
+        # plus single-string system/exec, backtick and qx{} shell commands.
+        if ext == "pl" and RE_SQL_CONCAT_PL.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if ext == "pl" and RE_SHELL_CONCAT_PL.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

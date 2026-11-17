@@ -3,8 +3,10 @@
 The line-scanner regex rules in cursorscan/rules/injection.py also cover PHP
 (`.` concat), Java (`+` concat), Ruby (`+` concat / `#{}` interpolation),
 Go (`+` concat / fmt.Sprintf verbs), C# (`+` concat / `$"..."` interpolated
-templates), Kotlin (`+` concat) and Rust (`format!` / `format_args!` /
+templates), Kotlin (`+` concat), Rust (`format!` / `format_args!` /
 `fmt::format` interpolation, `+` concat, `Command::new("sh").arg("-c")`)
+and Perl (DBI double-quoted `$var` interpolation / `.` concat,
+single-string `system`/`exec`, backticks, `qx{}`)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -635,6 +637,130 @@ class TestRustShellConcat:
         ) == []
 
 
+class TestPerlSqlConcat:
+    """Regex-layer lock for the Perl DBI receivers (prepare / do / selectrow_* /
+    selectall_* / selectcol_arrayref): a double-quoted query literal with `$var`
+    interpolation (double-quoted Perl strings interpolate scalars at runtime) or
+    a query literal built with the `.` concatenation operator flags
+    ``injection.sql_concat``; parameterized `?` placeholders bound separately
+    and single-quoted literals stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.pl", code)]
+
+    def test_prepare_double_quoted_interpolation_flags(self):
+        assert self._reg(
+            '$dbh->prepare("SELECT * FROM users WHERE name = \'$name\'")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_do_double_quoted_interpolation_flags(self):
+        assert self._reg(
+            '$dbh->do("DELETE FROM logs WHERE id = $id")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_selectrow_array_interpolation_flags(self):
+        assert self._reg(
+            '$dbh->selectrow_array("SELECT password FROM users WHERE name = \'$name\'")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_selectall_arrayref_interpolation_flags(self):
+        assert self._reg(
+            '$dbh->selectall_arrayref("UPDATE accounts SET balance = $amt WHERE id = 1")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_do_dot_concat_flags(self):
+        assert self._reg(
+            '$dbh->do("SELECT * FROM t " . $where)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_prepare_dot_concat_flags(self):
+        assert self._reg(
+            '$dbh->prepare("UPDATE t SET " . $cols . " WHERE id = 1")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_selectcol_single_quoted_dot_concat_flags(self):
+        # `.` concatenation splices into the query at runtime even when the
+        # fragment is single-quoted (the `$v` operand is still interpolated).
+        assert self._reg(
+            "$dbh->selectcol_arrayref('SELECT id FROM t WHERE x = ' . $v)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_placeholder_parameterized_is_quiet(self):
+        assert self._reg(
+            '$dbh->prepare("SELECT * FROM users WHERE name = ?")->execute($name)\n'
+        ) == []
+
+    def test_do_placeholder_is_quiet(self):
+        assert self._reg(
+            '$dbh->do("DELETE FROM logs WHERE id = ?", {}, $id)\n'
+        ) == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg('$dbh->prepare("SELECT 1")\n') == []
+
+    def test_double_quoted_without_interpolation_is_quiet(self):
+        # `$name` appears in a comment-like trailing context, not inside the
+        # query literal; no runtime splice into the SQL string.
+        assert self._reg(
+            '$ok = $dbh->prepare("SELECT * FROM users WHERE name = ?");\n'
+        ) == []
+
+
+class TestPerlShellConcat:
+    """Regex-layer lock for Perl shell execution: the one-argument
+    ``system("...$var...")`` / ``exec "$cmd $var"`` single-string forms,
+    backtick operators and ``qx{...}`` with a `$var` command string flag
+    ``injection.shell_concat``; argument-list ``system("ls", $dir)``, static
+    single-string commands and ``qx`` without interpolation stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.pl", code)]
+
+    def test_system_single_string_interpolation_flags(self):
+        assert self._reg(
+            'system("rm -rf $dir")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_exec_single_string_interpolation_flags(self):
+        assert self._reg(
+            'exec "ls -la $f"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_backtick_interpolation_flags(self):
+        assert self._reg(
+            '`rm -rf $dir`\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_qx_braces_interpolation_flags(self):
+        assert self._reg(
+            'qx{git push origin $branch}\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_qx_parens_interpolation_flags(self):
+        assert self._reg(
+            'my $out = qx(ls $dir);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_form_is_quiet(self):
+        assert self._reg(
+            'system("ls", $dir)\n'
+        ) == []
+
+    def test_exec_argument_list_is_quiet(self):
+        assert self._reg(
+            'exec("npm", "run", "build")\n'
+        ) == []
+
+    def test_static_system_is_quiet(self):
+        assert self._reg('system("true")\n') == []
+
+    def test_static_backtick_is_quiet(self):
+        assert self._reg("`date`\n") == []
+
+    def test_static_qx_is_quiet(self):
+        assert self._reg('qx{git log --oneline}\n') == []
+
+
 class TestJSSqlConcatRegex:
     """Regex-layer lock for the JS DB-driver receivers: node-postgres /
     mysql2 / better-sqlite3 style ``pool/connection/client/conn.query`` and
@@ -759,6 +885,21 @@ class TestCrossExtensionSilence:
                          "x.cs") == [("injection.shell_concat", 1)]
         assert self._reg('Process.Start("cmd", "/c " + payload);\n',
                          "x.java") == []
+
+    def test_perl_receiver_silent_on_php_file(self):
+        # ``$var->prepare(...)`` receiver syntax also appears in PHP, but the
+        # `$var` interpolation rule only fires for .pl extensions.
+        assert self._reg(
+            '$stmt = $conn->prepare("SELECT * FROM users WHERE name = \'$name\'")\n',
+            "x.php") == []
+
+    def test_perl_parameterized_query_is_quiet(self):
+        assert self._reg(
+            '$dbh->prepare("SELECT * FROM users WHERE name = ?")->execute($name)\n',
+            "x.pl") == []
+
+    def test_perl_static_system_is_quiet(self):
+        assert self._reg('system("true")\n', "x.pl") == []
 
 
 class TestPythonFStringSqlConcat:
