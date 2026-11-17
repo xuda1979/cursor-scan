@@ -137,6 +137,18 @@ class TestZeroFalsePositives:
         assert good_result.scanned_files >= 5
         assert good_result.skipped_files == 0
 
+    def test_secure_go_csharp_kotlin_fixtures_are_clean(self, good_result):
+        """AC2 extends to the regex-fallback injection rules' new languages:
+        the quiet-negative fixtures added with the Go/C#/Kotlin patterns must
+        stay present and keep producing zero findings."""
+        good_dir = os.path.join(os.path.dirname(__file__), "..", "fixtures", "scan_good")
+        for name in ("secure_injection.go", "secure_injection.cs", "secure_injection.kt"):
+            assert os.path.isfile(os.path.join(good_dir, name)), \
+                f"{name} must exist (AC2 coverage)"
+            assert not any(f.file.endswith(name)
+                           for f in good_result.findings + good_result.suppressed), \
+                f"{name} must have no findings"
+
 
 class TestScorecard:
     """AC3: coherent 0-100 score + grade for both trees."""
