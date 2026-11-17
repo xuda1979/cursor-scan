@@ -44,7 +44,10 @@ RE_XML_PARSE = re.compile(
     r"|expat\.ParserCreate)\s*\(",
 )
 RE_YAML_UNSAFE = re.compile(
-    r"\byaml\.unsafe_load\b"
+    # Python (yaml.unsafe_load) plus Ruby: YAML.unsafe_load / Psych.unsafe_load
+    # (Psych >= 4 made the plain safe-loading default; unsafe_load is the
+    # explicit arbitrary-object constructor in both ecosystems).
+    r"\b(?:yaml|YAML|Psych)\.unsafe_load\b"
 )
 RE_YAML_LOAD = re.compile(
     r"\b(yaml\.load|yaml\.load_all)\s*\(.*"
@@ -67,12 +70,37 @@ RE_VM_RUN = re.compile(
     r"""(?:require\s*\(\s*["'](?:node:)?vm["']\s*\)|\bvm)"""
     r"""\.(?:runInThisContext|runInNewContext|runInContext)\s*\(\s*[^)"']""",
 )
+# Ruby's Marshal: ``Marshal.load`` / ``Marshal.restore`` (alias) unpickle a
+# serialized object graph into arbitrary live objects -- the Ruby counterpart
+# of Python pickle (CWE-502).  Full constant qualification ``::Marshal`` is
+# accepted too; the Marshal.dump / Marshal.dump_to_file writer direction and
+# a bare ``load`` without the Marshal receiver stay quiet.
+RE_RUBY_MARSHAL = re.compile(
+    r"""\b(?:::)?Marshal\.(?:load|restore)\s*\(""",
+)
+# Java's native-serialization and XML-decoder sinks (CWE-502): readObject /
+# readUnshared on an ObjectInputStream reconstruct arbitrary objects, and
+# XMLDecoder instantiates arbitrary Java classes from an XML document. A
+# static literal argument is inert XML/schema content; an empty call (the
+# classic ``ois.readObject()``) or a variable/expression is an untrusted data
+# stream. Merely constructing an ObjectInputStream does not deserialize, so
+# the new-... constructor line stays quiet.
+RE_JAVA_READOBJ = re.compile(
+    r"""\.read(?:Object|Unshared)\s*\(\s*([^)"']*?)\s*\)""",
+)
+_REAJAVA_STATIC_ARG = re.compile(
+    r"""^(?:[A-Za-z_$][\w$]*\.)*[A-Z][\w$]*\s*(?:\.class)?$""",
+)
+RE_JAVA_XMLDECODER = re.compile(
+    r"""\bXMLDecoder\s*\(""",
+)
 # node-serialize's unserialize() deserializes a serialized function graph by
 # eval'ing the payload (CVE-2017-5941): any non-literal payload is arbitrary
-# code execution, the JS counterpart of Python pickle. Both the bare
-# ``unserialize(payload)`` (destructured import) and the ``serialize.
-# unserialize(payload)`` dotted spelling are covered; the serialize() writer
-# direction and a bare static literal stay quiet.
+# code execution, the JS counterpart of Python pickle. PHP's unserialize()
+# reconstructs arbitrary PHP objects the same way (CWE-502), so the same
+# sink family covers both. The matching writer directions (serialize() /
+# node-serialize's serialize(), PHP's serialize()) and a bare static literal
+# stay quiet.
 RE_NODE_UNSERIALIZE = re.compile(
     r"\b(?:serialize\.)?unserialize\s*\(\s*[^)\"']",
 )
@@ -126,8 +154,29 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.eval", "vm.run* 外部输入",
                                 "vm.runIn*Context 执行外部源代码，可执行任意代码",
                                 "重构解析逻辑，不使用 vm 执行用户代码"))
+        # Ruby Marshal: load/restore unpickle an object graph into live objects.
+        if RE_RUBY_MARSHAL.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Marshal)",
+                                "Marshal.load/restore 反序列化 Ruby 对象图，可执行任意代码",
+                                "改用安全的文本格式 (JSON/YAML load_serializable)"))
+        # Java native deserialization: recursive data reconstruction, the
+        # classic "trampoline" gadget chain (CWE-502). A static-literal
+        # argument (document/class-name/schema constant) is inert; an empty
+        # readObject() or a variable argument is an untrusted data stream.
+        if m := RE_JAVA_READOBJ.search(raw):
+            arg = m.group(1).strip()
+            if not arg or not _REAJAVA_STATIC_ARG.search(arg):
+                findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Java)",
+                                    "readObject/readUnshared 反序列化不受信数据流，",
+                                    "对输入做签名校验并限制 gadget 类 (ObjectInputFilter)"))
+        # XMLDecoder instantiates arbitrary Java classes from an XML document --
+        # immediate class instantiation, not just object reconstruction.
+        if RE_JAVA_XMLDECODER.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Java)",
+                                "XMLDecoder 从 XML 实例化任意 Java 类",
+                                "改用安全的解析器 (StAX/SAX) 并验证 DTD/类型"))
         if RE_NODE_UNSERIALIZE.search(raw):
-            findings.append(hit(lineno, "deser.pickle", "node-serialize 反序列化",
-                                "unserialize eval 反序列化负载，可执行任意代码 (CVE-2017-5941)",
+            findings.append(hit(lineno, "deser.pickle", "unserialize 反序列化",
+                                "unserialize 反序列化负载并重建对象，可执行任意代码 (CVE-2017-5941)",
                                 "改用 JSON.parse 等安全反序列化"))
     return findings

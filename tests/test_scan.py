@@ -22,6 +22,8 @@ BAD_EXPECTED = [
     ("deserialization.py", {"deser.pickle", "deser.yaml_load", "deser.eval", "deser.exec",
                             "deser.xxe"}),
     ("exec_snippets.js", {"deser.eval", "deser.pickle"}),
+    ("marshal_load.rb", {"deser.pickle", "deser.yaml_load"}),
+    ("unsafe_deser.java", {"deser.pickle"}),
     ("injection.py", {"injection.sql_concat", "injection.shell_concat"}),
     ("permissions.py", {"perms.chmod_world_writable", "perms.world_writable_dir",
                         "perms.tmp_write_insecure", "perms.mktemp_unsafe"}),

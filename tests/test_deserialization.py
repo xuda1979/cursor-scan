@@ -365,3 +365,112 @@ class TestYamlLoaderSelection:
     def test_safe_load_quiet(self):
         assert self._py("yaml.safe_load(text)\n") == []
 
+
+class TestRubyMarshal:
+    """Ruby's Marshal.load/restore unpickle a serialized object graph into
+    arbitrary live objects (CWE-502) -- the Ruby counterpart of pickle.
+    The dump writer direction and a bare ``load`` stay quiet."""
+
+    def _rb(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.rb", code)]
+
+    def test_load_flags(self):
+        assert self._rb("Marshal.load(data)\n") == [("deser.pickle", "critical")]
+
+    def test_restore_alias_flags(self):
+        assert self._rb("Marshal.restore(File.binread(path))\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_fully_qualified_const_flags(self):
+        assert self._rb("::Marshal.load(blob)\n") == [("deser.pickle", "critical")]
+
+    def test_dump_writer_is_quiet(self):
+        assert self._rb("Marshal.dump(obj)\n") == []
+
+    def test_bare_load_is_quiet(self):
+        # Without the Marshal receiver this is a plain method call.
+        assert self._rb("load(data)\n") == []
+
+
+class TestRubyYamlUnsafe:
+    """Ruby's Psych >= 4 made plain loading safe by default; the explicit
+    unsafe_load is the arbitrary-object constructor (CWE-502), the same sink
+    family as Python's yaml.load rule."""
+
+    def _rb(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.rb", code)]
+
+    def test_yaml_unsafe_load_flags(self):
+        assert self._rb("YAML.unsafe_load(text)\n") == [("deser.yaml_load", "critical")]
+
+    def test_psych_unsafe_load_flags(self):
+        assert self._rb("Psych.unsafe_load(text)\n") == [("deser.yaml_load", "critical")]
+
+    def test_lowercase_yaml_unsafe_load_flags(self):
+        assert self._rb("yaml.unsafe_load(text)\n") == [("deser.yaml_load", "critical")]
+
+    def test_plain_yaml_load_is_quiet(self):
+        # Psych >= 4 default is safe loading; YAML.load is not the unsafe sink.
+        assert self._rb("YAML.load(text)\n") == []
+
+    def test_safe_load_is_quiet(self):
+        assert self._rb("YAML.safe_load(text)\n") == []
+
+
+class TestJavaDeser:
+    """Java native deserialization: readObject/readUnshared reconstruct
+    arbitrary objects, and XMLDecoder instantiates arbitrary classes from an
+    XML document (CWE-502). A static-literal or class-name argument is inert;
+    an empty call or a variable argument is an untrusted data stream."""
+
+    def _java(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("X.java", code)]
+
+    def test_readobject_noarg_flags(self):
+        assert self._java("return ois.readObject();\n") == [("deser.pickle", "critical")]
+
+    def test_readobject_dynamic_arg_flags(self):
+        assert self._java("return ois.readObject(stream);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_readobject_static_string_literal_is_quiet(self):
+        # "CONFIG" is inert content, not an untrusted data stream.
+        assert self._java('return ois.readObject("CONFIG");\n') == []
+
+    def test_readobject_class_name_arg_is_quiet(self):
+        assert self._java("return ois.readObject(String.class);\n") == []
+
+    def test_read_unshared_flags(self):
+        assert self._java("return ois.readUnshared();\n") == [("deser.pickle", "critical")]
+
+    def test_xml_decoder_flags(self):
+        assert self._java("XMLDecoder dec = new XMLDecoder(in);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_object_input_stream_ctor_is_quiet(self):
+        # Constructing the stream does not deserialize.
+        assert self._java("ObjectInputStream ois = new ObjectInputStream(in);\n") == []
+
+    def test_bare_method_without_dot_is_quiet(self):
+        # The regex requires the dotted receiver form.
+        assert self._java("return readObject();\n") == []
+
+
+class TestPhpUnserialize:
+    """PHP unserialize() reconstructs arbitrary PHP objects from a payload
+    (CWE-502), the same sink family as node-serialize's unserialize. The
+    serialize() writer direction stays quiet."""
+
+    def _php(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.php", code)]
+
+    def test_unserialize_var_flags(self):
+        assert self._php("$obj = unserialize($payload);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_unserialize_literal_is_quiet(self):
+        assert self._php('unserialize("O:1:...")\n') == []
+
+    def test_serialize_writer_is_quiet(self):
+        assert self._php("$data = serialize($obj);\n") == []
+
