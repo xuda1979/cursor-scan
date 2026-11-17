@@ -347,6 +347,28 @@ class TestGoShellConcat:
     def test_static_sh_c_is_quiet(self):
         assert self._reg('exec.Command("sh", "-c", "echo hi").Run()\n') == []
 
+    def test_windows_cmd_c_concat_flags(self):
+        assert self._reg(
+            'exec.Command("cmd", "/C", "del " + path).Run()\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_windows_cmd_exe_c_sprintf_flags(self):
+        assert self._reg(
+            'exec.Command("cmd.exe", "/c", fmt.Sprintf("xcopy %s", src)).Run()\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_windows_cmd_dash_c_concat_flags(self):
+        # cmd also accepts the -c spelling of the command switch.
+        assert self._reg(
+            'exec.Command("cmd", "-c", "type " + file).Run()\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_windows_cmd_c_is_quiet(self):
+        assert self._reg('exec.Command("cmd", "/C", "del /q tmp.txt").Run()\n') == []
+
+    def test_static_windows_cmd_exe_is_quiet(self):
+        assert self._reg('exec.Command("cmd", "/C", "echo hi").Run()\n') == []
+
 
 class TestCSharpSqlConcat:
     def _reg(self, code: str):

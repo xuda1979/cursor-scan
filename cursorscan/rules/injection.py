@@ -152,8 +152,10 @@ RE_SHELL_CONCAT_JAVA = re.compile(
 # the explicit `-c` shell invocation (exec.Command("ping", "-c", host) is
 # ping's count flag, not a shell) PLUS a concatenated/`+` or interpolating
 # Sprintf command string; exec.Command("ping", host) arg-list forms stay
-# quiet.  CommandContext shifts the context-first argument, skipped by the
-# optional ``[^,]+,\s*`` group.
+# quiet.  The Windows cmd shell is covered by the `cmd`/`cmd.exe` + `/C`
+# (also `/c`, `-c`) invocation with the same dynamic command-string demand;
+# `cmd /C` with a static command stays quiet.  CommandContext shifts the
+# context-first argument, skipped by the optional ``[^,]+,\s*`` group.
 RE_SQL_CONCAT_GO = re.compile(
     r"\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?(?:" + _SQL_STR + r")\s*\+"
     r"|\.(?:Raw|Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\s*\(\s*(?:[^,]+,\s*)?fmt\.Sprintf\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\""
@@ -162,9 +164,14 @@ RE_SQL_CONCAT_GO = re.compile(
 )
 RE_SHELL_CONCAT_GO = re.compile(
     r"exec\.Command(?:Context)?\s*\(\s*(?:[^,]+,\s*)?"
-    r"(?:[\"'](?:sh|bash|zsh|dash|/bin/sh|/bin/bash|/bin/zsh|/bin/dash)[\"']\s*,\s*[\"']-c[\"']\s*,\s*(?:"
+    r"(?:"
+    r"[\"'](?:sh|bash|zsh|dash|/bin/sh|/bin/bash|/bin/zsh|/bin/dash)[\"']\s*,\s*[\"']-c[\"']\s*,\s*(?:"
     r"\"[^\"]*\"\s*\+|'[^']*'\s*\+|fmt\.Sprintf\(\s*\"[^\"]*%[a-zA-Z][^\"]*\"\s*,"
-    r"))",
+    r")"
+    r"|[\"'](?:cmd|cmd\.exe)[\"']\s*,\s*[\"']/?-?c[\"']\s*,\s*(?:"
+    r"\"[^\"]*\"\s*\+|'[^']*'\s*\+|fmt\.Sprintf\(\s*\"[^\"]*%[a-zA-Z][^\"]*\"\s*,"
+    r")"
+    r")",
     re.I,
 )
 # C# (.cs): System.Data/System.Data.SqlClient command constructors
