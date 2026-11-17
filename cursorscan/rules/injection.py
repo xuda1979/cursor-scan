@@ -22,6 +22,20 @@ RE_SQL_FSTRING_ASSIGN = re.compile(
     r"""^\s*[A-Za-z_]\w*\s*=\s*f["'][^"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE).*\{[^}]+}""",
     re.I,
 )
+# Call form: execute/executemany/cursor.execute/db.query/query_all/query_one
+# fed a directly-interpolated f-string literal (no assignment indirection).
+# The `{...}` interpolation is required so an inert f-string without
+# placeholders (e.g. execute(f"SELECT 1")) stays quiet.
+# The quoted f-string section is matched with same-quote closure (a double-
+# quoted f-string may legally contain ' and vice-versa, so the classic
+# [^"'] class would break on embedded opposite quotes, e.g.
+# f"DELETE ... WHERE owner = '{owner}'").
+RE_SQL_FSTRING_CALL_PY = re.compile(
+    r"\b(?:execute|executemany|query|query_all|query_one|run_query)\s*\(\s*(?:"
+    r"f\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\{[^}]+\}"
+    r"|f'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*\{[^}]+\})",
+    re.I,
+)
 RE_SQL_CONCAT_JS = re.compile(
     r"\b(db\.(query|run|all|get)|mysql\.query|pg\.query|knex\.raw|sequelize\.query)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
     re.I,
@@ -40,6 +54,20 @@ RE_SHELL_CONCAT = re.compile(
 )
 RE_DANGEROUS_SHELL = re.compile(
     r"\b(shell\s*=\s*True|shell:\s*true)\b", re.I
+)
+# Python f-string shell forms: os.system/os.popen/subprocess family called
+# directly with an interpolating f-string (os.system(f"rm -rf {dir}")).  The
+# `{...}` interpolation is required; static f-strings (os.system(f"echo hi"))
+# and plain strings stay quiet.  shell=True lines are already covered by
+# RE_DANGEROUS_SHELL, and the two rules share the rule_id, so the f-string
+# line keeps its single finding either way.
+# Same-quote closure as RE_SQL_FSTRING_CALL_PY, so f-strings with embedded
+# opposite quotes (os.system(f"rm -rf '{dir}'")) still flag.
+RE_SHELL_FSTRING_PY = re.compile(
+    r"\b(?:subprocess\.(?:call|run|Popen|check_output|check_call)|os\.system|os\.popen|system|popen)\s*\(\s*(?:"
+    r"f\"[^\"]*\{[^}]+\}"
+    r"|f'[^']*\{[^}]+\})",
+    re.I,
 )
 # Cross-language SQL concatenation.
 #
@@ -128,13 +156,18 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if "import " in raw or "from " in raw:
             continue
         line = raw
-        if py_ext and (RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line)):
+        if py_ext and (RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line)
+                       or RE_SQL_FSTRING_CALL_PY.search(line)):
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if js_ext and (RE_SQL_CONCAT_JS.search(line) or RE_SQL_CONCAT_JS_ASSIGN.search(line)):
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
         if py_ext and RE_SHELL_CONCAT.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if py_ext and RE_SHELL_FSTRING_PY.search(line) \
+                and not (RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower()):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         # PHP '.', Java '+', Ruby '+' / '#{}' SQL concatenation.

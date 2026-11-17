@@ -186,3 +186,95 @@ class TestCrossExtensionSilence:
     def test_js_parameterized_query_is_quiet(self):
         assert self._reg('conn.query("SELECT * FROM t WHERE id = ?", [id]);\n',
                          "x.js") == []
+
+
+class TestPythonFStringSqlConcat:
+    """AST-blind receivers fed a directly-interpolated f-string literal."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py", code)]
+
+    def test_db_query_fstring_flags(self):
+        assert self._reg('conn.query(f"DELETE FROM invoices WHERE owner = \'{owner}\'")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_run_query_fstring_flags(self):
+        assert self._reg('run_query(f"DELETE FROM audit_log WHERE created < {days}")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_query_all_fstring_flags(self):
+        assert self._reg('query_all(f"SELECT * FROM products WHERE cat = {category}")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_query_one_fstring_flags(self):
+        assert self._reg('query_one(f"SELECT email FROM profiles WHERE id = {u_id}")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_single_quoted_fstring_embedded_double_quote_flags(self):
+        # Same-quote closure: an embedded " inside a '...' f-string.
+        assert self._reg('cur.execute(f\'SELECT "owner" FROM t WHERE id = {uid}\')\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_executemany_fstring_flags(self):
+        assert self._reg('cur.executemany(f"INSERT INTO t (id) VALUES ({v})", rows)\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_inert_fstring_no_interp_is_quiet(self):
+        assert self._reg('execute(f"SELECT 1")\n') == []
+
+    def test_static_fstring_is_quiet(self):
+        # Static content, no interpolation: os.system(f"echo hi") style shell
+        # line stays quiet too, so a python.cursor.execute(f"SELECT *") line
+        # with no placeholder f-string must not fire.
+        assert self._reg('cur.execute(f"SELECT * FROM users")\n') == []
+
+    def test_parameterized_execute_is_quiet(self):
+        assert self._reg('cur.execute("SELECT * FROM t WHERE id = %s", (uid,))\n') == []
+
+    def test_method_receiver_like_getquery_fstring_is_quiet(self):
+        # obj.getquery(f"...") must not match the bare \bquery\b boundary.
+        assert self._reg('db.getquery(f"SELECT * FROM t WHERE id = {uid}")\n') == []
+
+
+class TestPythonFStringShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py", code)]
+
+    def test_bare_system_fstring_flags(self):
+        assert self._reg('system(f"rm -rf {workdir}")\n') == [
+            ("injection.shell_concat", 1)]
+
+    def test_bare_popen_fstring_flags(self):
+        assert self._reg('popen(f"tail -n 1 {log_file}")\n') == [
+            ("injection.shell_concat", 1)]
+
+    def test_os_popen_fstring_flags(self):
+        assert self._reg('os.popen(f"ls {dir}")\n') == [("injection.shell_concat", 1)]
+
+    def test_subprocess_call_executable_fstring_flags(self):
+        assert self._reg('subprocess.check_output(f"id {user}")\n') == [
+            ("injection.shell_concat", 1)]
+
+    def test_embedded_opposite_quote_flags(self):
+        # f-string with an embedded single quote inside double-quoted shell.
+        assert self._reg('os.system(f"rm -rf \'{dir}\'")\n') == [
+            ("injection.shell_concat", 1)]
+
+    def test_static_os_system_is_quiet(self):
+        assert self._reg('os.system("echo hi")\n') == []
+
+    def test_no_interp_fstring_is_quiet(self):
+        assert self._reg('os.system(f"echo hello")\n') == []
+
+    def test_subprocess_list_form_is_quiet(self):
+        assert self._reg('subprocess.run(["ls", d])\n') == []
+
+    def test_subprocess_shell_true_does_not_double_fire(self):
+        # The f-string branch must step aside when the shell=True branch
+        # already owns the line (single finding beats the dedup-blindness of
+        # the standalone analyzer).
+        assert self._reg('subprocess.run(f"ping {host}", shell=True)\n') == [
+            ("injection.shell_concat", 1)]
+
+    def test_import_line_is_quiet(self):
+        assert self._reg('from subprocess import run\n') == []

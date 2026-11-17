@@ -38,3 +38,27 @@ def run_update(name: str):
 
 def run_ping(host: str):
     subprocess.call("ping -c 1 " + host)
+
+
+def purge_by_owner(conn, owner: str):
+    return conn.query(f"DELETE FROM invoices WHERE owner = '{owner}'")
+
+
+def wipe_stale_logs(run_query, days: int):
+    return run_query(f"DELETE FROM audit_log WHERE created < {days}")
+
+
+def fetch_favorites(query_all, category: str):
+    return query_all(f"SELECT * FROM products WHERE cat = {category}")
+
+
+def fetch_profile(query_one, u_id: int):
+    return query_one(f"SELECT email FROM profiles WHERE id = {u_id}")
+
+
+def reset_workdir(workdir: str):
+    system(f"rm -rf {workdir}")
+
+
+def peek_service_log(popen, log_file: str):
+    return popen(f"tail -n 1 {log_file}")
