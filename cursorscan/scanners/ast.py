@@ -693,9 +693,23 @@ def _fn_is_db_query(fn: str) -> bool:
 
 
 def _js_external(args: str) -> bool:
+    """Heuristic: does this JS snippet draw on external input?
+
+    Conservative by design -- static string literals stay quiet and a bare
+    identifier is ambiguous, so only named external sources count.  Both
+    server-side request plumbing (req./request./body./ctx./process.env...) and
+    browser DOM-XSS sources (location./window.name/document.cookie/navigator.
+    userAgent/localStorage, the browser twin of request data) drive the
+    eval-family rules: a code string built from any of them is
+    attacker-influenceable.
+    """
     low = args.lower()
     return any(x in low for x in ("req.", "request.", "query.", "body.", "ctx.",
-                                  "process.env", "input", "form", "url."))
+                                  "process.env", "input", "form", "url.",
+                                  # browser DOM sources (OWASP DOM XSS)
+                                  "location.", "window.name", "document.cookie",
+                                  "document.url", "document.referrer",
+                                  "useragent", "localstorage", "sessionstorage"))
 
 
 _JS_STATIC_STRING = re.compile(r"^[`\"']([A-Za-z0-9_.\-]+)[`\"']")

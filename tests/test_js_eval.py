@@ -90,6 +90,63 @@ class TestFunctionCallForm:
         assert finds == []
 
 
+class TestBrowserDomEvalSources:
+    """The DOM is a browser-side external source: location/URL fragments,
+    cookies, window.name and stored values carry attacker-influenceable data
+    into eval-family sinks.  The code-string may be concat-built from a
+    location read (``'return ' + window.location.hash.substring(1)``) rather
+    than the raw source, so the marker tuple must spot the DOM source itself.
+    Static templates and bare identifiers stay quiet (conservative gate)."""
+
+    def test_location_concat_built_function_flags(self):
+        finds = _js("const c = window.Function('return ' + window.location.hash.substring(1))\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("deser.eval", "critical")]
+
+    def test_location_function_call_flags(self):
+        finds = _js("Function(window.location.search + 'x')()\n")
+        assert [(f.rule_id, f.line) for f in finds] == [("deser.eval", 1)]
+
+    def test_cookie_new_function_flags(self):
+        finds = _js("new Function(document.cookie)\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("deser.eval", "critical")]
+
+    def test_window_name_flags(self):
+        finds = _js("const f = new Function(window.name)\n")
+        assert [(f.rule_id, f.severity) for f in finds] == [
+            ("deser.eval", "critical")]
+
+    def test_url_suffix_eval_flags(self):
+        finds = _js("eval(window.location.hash.substring(1))\n")
+        assert [(f.rule_id, f.line) for f in finds] == [("deser.eval", 1)]
+
+    def test_static_string_body_still_quiet(self):
+        finds = _js("Function('return 1')()\n")
+        assert finds == []
+
+    def test_static_concat_body_still_quiet(self):
+        # Both operands are literals: not external input, not provably unsafe.
+        finds = _js("new Function('return ' + 'x')\n")
+        assert finds == []
+
+    def test_bare_identifier_body_still_quiet(self):
+        # An ambiguous bare name is not a named external source.
+        finds = _js("new Function(text)\n")
+        assert finds == []
+
+    def test_location_read_without_eval_is_quiet(self):
+        # Reading location into the DOM (textContent) is not code execution.
+        finds = _js("const h = document.getElementById('b');\n"
+                    "h.textContent = window.location.hash\n")
+        assert finds == []
+
+    def test_document_url_cookie_access_quiet_without_sink(self):
+        finds = _js("const u = document.URL;\n"
+                    "const c = document.cookie;\n")
+        assert finds == []
+
+
 class TestExecSyncFamily:
     """execSync / spawnSync / fork are the sync children of exec/spawn and
     carry the same shell-concat injection surface."""
