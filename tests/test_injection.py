@@ -15,7 +15,11 @@ into SQLite.swift / FMDB receivers and `sqlite3_exec`, `Process` `/bin/sh -c`
 / `system()` commands built with concat / interpolation) and Shell
 (`sqlite3` / `mysql` / `psql` / `mysqlsh` handed a double-quoted SQL literal
 interpolating a `$var`, plus `eval` and `sh`/`bash`/`zsh`/`dash -c` with a
-variable command argument)
+variable command argument) and R (DBI receivers `dbGetQuery` / `dbSendQuery` /
+`dbExecute` / `dbSendStatement` / `dbGetStatement` getting `paste0`/`paste`
+splices, `sprintf` printf-verb literals or `glue`/`glue_sql` `{var}`
+interpolation, including `<-` assignment builds, plus `system()` fed a
+`paste0`/`paste`/`sprintf`/`glue`-built command string)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -1583,3 +1587,132 @@ class TestShellShellConcat:
     def test_eval_in_subshell_is_quiet(self):
         # `$(eval ...)` is command substitution, not the eval builtin here.
         assert self._reg('x=$(eval echo hi)\n') == []
+
+
+class TestRSqlConcat:
+    """Regex-layer lock for R SQL string concatenation: DBI receivers
+    (``dbGetQuery`` / ``dbSendQuery`` / ``dbExecute`` / ``dbSendStatement`` /
+    ``dbGetStatement``) fed a ``paste0``/``paste`` splice, a ``sprintf``
+    printf-verb literal, or a ``glue``/``glue_sql`` ``{var}`` interpolation
+    flag ``injection.sql_concat`` — including when the tainted query is built
+    first via ``<-`` assignment.  Static literals, ``params = list(...)``
+    bound queries, and non-SQL ``paste0`` table names stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.r", code)]
+
+    def test_paste0_splice_flags(self):
+        assert self._reg(
+            'dbGetQuery(con, paste0("SELECT * FROM users WHERE id = ", id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_paste_splice_flags(self):
+        assert self._reg(
+            'dbSendQuery(con, paste("SELECT * FROM t WHERE x = ", v))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_paste0_update_flags(self):
+        assert self._reg(
+            'dbExecute(con, paste0("UPDATE accounts SET balance = ", amt, '
+            '" WHERE id = ", uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_paste_delete_flags(self):
+        assert self._reg(
+            'dbSendStatement(con, paste("DELETE FROM sessions WHERE token =", tok))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sprintf_verb_flags(self):
+        assert self._reg(
+            'dbExecute(con, sprintf("UPDATE t SET n = %s WHERE id = 1", name))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sprintf_int_verb_flags(self):
+        assert self._reg(
+            'dbSendStatement(con, sprintf("DELETE FROM t WHERE id = %d", uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sprintf_quoted_verb_flags(self):
+        assert self._reg(
+            'dbGetQuery(con, sprintf("SELECT * FROM orders WHERE sku = \'%s\'", sku))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_glue_sql_interpolation_flags(self):
+        assert self._reg(
+            'dbGetQuery(con, glue::glue_sql("SELECT * FROM t WHERE name = {name}"))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_glue_interpolation_flags(self):
+        assert self._reg(
+            'dbSendQuery(con, glue("SELECT * FROM logs WHERE level = {level}"))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_build_flags(self):
+        assert self._reg(
+            'q <- paste0("SELECT * FROM users WHERE id = ", id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_sprintf_flags(self):
+        assert self._reg(
+            'sql <- sprintf("UPDATE t SET x = %s WHERE id = 1", val)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_glue_sql_flags(self):
+        assert self._reg(
+            'stmt <- glue::glue_sql("INSERT INTO t VALUES ({a}, {b})")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg('dbGetQuery(con, "SELECT COUNT(*) FROM users")\n') == []
+
+    def test_param_binding_is_quiet(self):
+        assert self._reg(
+            'dbGetQuery(con, "SELECT * FROM users WHERE id = ?", params = list(id))\n'
+        ) == []
+
+    def test_static_where_literal_is_quiet(self):
+        assert self._reg('dbGetQuery(con, "SELECT * FROM t WHERE id = 5")\n') == []
+
+    def test_paste0_non_sql_literal_is_quiet(self):
+        # paste0 of a non-SQL string (here just a table-name piece) stays quiet.
+        assert self._reg('dbGetQuery(con, paste0("tbl_", "users"), params = list())\n') == []
+
+    def test_single_quote_literal_flags(self):
+        assert self._reg(
+            "dbGetQuery(con, paste0('SELECT * FROM users WHERE id = ', id))\n"
+        ) == [("injection.sql_concat", 1)]
+
+
+class TestRShellConcat:
+    """Regex-layer lock for R shell command concatenation: ``system()`` fed a
+    ``paste0``/``paste`` splice, a ``sprintf`` printf-verb literal, or a
+    ``glue`` ``{var}`` interpolation flags ``injection.shell_concat``; static
+    command strings and argument-list ``system2()`` stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.r", code)]
+
+    def test_system_paste0_flags(self):
+        assert self._reg(
+            'system(paste0("rm -rf /tmp/", dir))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_paste_flags(self):
+        assert self._reg('system(paste("ls ", argv))\n') == [("injection.shell_concat", 1)]
+
+    def test_system_sprintf_flags(self):
+        assert self._reg(
+            'system(sprintf("ping -c 1 %s", host))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_glue_flags(self):
+        assert self._reg(
+            'system(glue::glue("tar czf {f}.tgz {f}"))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_static_is_quiet(self):
+        assert self._reg('system("ls -la /tmp")\n') == []
+
+    def test_system2_arglist_is_quiet(self):
+        assert self._reg('system2("ls", "/tmp")\n') == []
+        assert self._reg('system2("cp", c("a.txt", "b.txt"))\n') == []

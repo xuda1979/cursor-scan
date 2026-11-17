@@ -446,6 +446,42 @@ RE_SHELL_CONCAT_SH = re.compile(
     r"|\b(?:sh|bash|zsh|dash)\s+-c\s+(?:\$[a-zA-Z_{@*]|\"[^\"]*\$[a-zA-Z_{@*])",
     re.I,
 )
+# R (.r): DBI receivers (dbGetQuery / dbSendQuery / dbExecute / dbSendStatement /
+# dbGetStatement) handed a query string spliced through paste0() / paste()
+# (comma-joined runtime value), sprintf() with a printf verb baked into a
+# SQL-keyword literal (the Go fmt.Sprintf analog), or the glue package's
+# glue() / glue_sql() `{var}` interpolation (the R f-string analog — glue_sql
+# is the safest idiom yet textually substitutes the brace span straight into
+# the query).  A later-line driver call fed a `sql <- paste0(...)` / sprintf /
+# glue assignment is caught by the assignment form, mirroring
+# RE_SQL_FSTRING_ASSIGN.  Static literals and parameterized params=list(...)
+# binding stay quiet.  Shell forms: system() with a paste0/paste-joined,
+# sprintf-verb or glue-interpolated command string; static commands and
+# argument-list system2() stay quiet.
+RE_SQL_CONCAT_R = re.compile(
+    r"\b(?:dbGetQuery|dbSendQuery|dbExecute|dbSendStatement|dbGetStatement)\s*\(\s*[^,]+,\s*(?:"
+    r"(?:paste0|paste)\s*\(\s*(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\"|'[^']*(?:" + _SQL_KW + r")[^']*')\s*,"
+    r"|sprintf\s*\(\s*(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\"|'[^']*(?:" + _SQL_KW + r")[^']*%[a-zA-Z][^']*')"
+    r"|(?:glue::)?glue(?:_sql)?\s*\(\s*(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}]+\}\"|'[^']*(?:" + _SQL_KW + r")[^']*\{[^}]+\}')"
+    r")",
+    re.I,
+)
+RE_SQL_CONCAT_R_ASSIGN = re.compile(
+    r"^\s*[A-Za-z_]\w*\s*<-\s*(?:"
+    r"(?:paste0|paste)\s*\(\s*(?:\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\"|'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*')\s*,"
+    r"|sprintf\s*\(\s*(?:\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*%[a-zA-Z]|'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*%[a-zA-Z])"
+    r"|(?:glue::)?glue(?:_sql)?\s*\(\s*(?:\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\{[^}]+\}|'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*\{[^}]+\}')"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_R = re.compile(
+    r"\bsystem\s*\(\s*(?:"
+    r"(?:paste0|paste)\s*\(\s*(?:\"[^\"]*\"|'[^']*')\s*,"
+    r"|sprintf\s*\(\s*(?:\"[^\"]*%[a-zA-Z][^\"]*\"|'[^']*%[a-zA-Z][^']*')"
+    r"|(?:glue::)?glue\s*\(\s*(?:\"[^\"]*\{[^}]+\}|'[^']*\{[^}]+\}')"
+    r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -466,6 +502,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     cpp_ext = ext in ("c", "h", "cc", "cpp", "cxx", "hpp", "hxx")
     swift_ext = ext == "swift"
     sh_ext = ext in ("sh", "bash", "zsh")
+    r_ext = ext == "r"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -573,6 +610,15 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if sh_ext and RE_SHELL_CONCAT_SH.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # R paste0/paste, sprintf-verb and glue-interpolated query strings into
+        # DBI receivers (plus the sql <- assignment form), and system() with a
+        # paste-joined / sprintf / glue command string.
+        if r_ext and (RE_SQL_CONCAT_R.search(line) or RE_SQL_CONCAT_R_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (params=list())"))
+        if r_ext and RE_SHELL_CONCAT_R.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
