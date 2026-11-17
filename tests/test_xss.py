@@ -385,6 +385,38 @@ class TestScriptSrcInjection:
         assert _analyze('script.src = "https://cdn.example/x.js"\n') == []
 
 
+class TestGetScript:
+    """jQuery's $.getScript / jQuery.getScript fetch a remote script and
+    evaluate it. A dynamic URL is attacker-influenceable remote code; a
+    hardcoded literal is an ordinary static include."""
+
+    def test_dollar_get_script_dynamic_flags(self):
+        found = _analyze("$.getScript(url);\n")
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_dollar_get_script_concat_flags(self):
+        found = _analyze('$.getScript("https://cdn.example/lib-" + version + ".js");\n')
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_jquery_get_script_dynamic_flags(self):
+        found = _analyze("jQuery.getScript(buildUrl());\n")
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_get_script_static_url_is_quiet(self):
+        # A hardcoded CDN literal is inert static content.
+        assert _analyze('$.getScript("https://cdn.example.com/plugin.js");\n') == []
+
+    def test_get_script_template_literal_dynamic_flags(self):
+        found = _analyze("$.getScript(`https://cdn.example.com/lib-${version}.js`);\n")
+        assert [f.rule_id for f in found] == ["xss.script_src_injection"]
+
+    def test_get_script_finding_is_medium(self):
+        found = _analyze("$.getScript(url);\n")
+        assert len(found) == 1 and found[0].severity == "medium"
+        assert found[0].dimension == "xss"
+        assert found[0].fix
+
+
 class TestSetAttrEvent:
     """setAttribute with a string-form on* handler builds code from a string;
     property assignments (el.onload = fn) use function references and are fine."""

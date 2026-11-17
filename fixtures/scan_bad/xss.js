@@ -54,3 +54,15 @@ function replaceRow(html) {
 function wrapWithCard(html) {
   $("article").wrap(`<div class="card">${html}</div>`);
 }
+
+function loadPlugin(name) {
+  $.getScript(url_for_plugin(name));
+}
+
+function loadExtra(version) {
+  jQuery.getScript("https://cdn.example.com/lib-" + version + ".js");
+}
+
+function loadKnownPlugin() {
+  $.getScript("https://cdn.example.com/plugin.js");
+}

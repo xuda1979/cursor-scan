@@ -154,6 +154,15 @@ RE_SETATTR_EVENT = re.compile(
     re.I,
 )
 
+# ``$.getScript(url)`` / ``jQuery.getScript(url)`` fetch a remote script and
+# evaluate it -- the jQuery HTML-script injection sink. The URL is captured so
+# a hardcoded CDN literal stays quiet (ordinary static include); a variable,
+# concatenation or interpolation builds the URL dynamically and is
+# attacker-influenceable (same class as the script.src sink above).
+RE_GETSCRIPT = re.compile(
+    r"""(?:\$|jQuery)\.getScript\s*\(\s*([^)]*)""",
+)
+
 # Svelte's {@html ...} block inserts raw, unescaped HTML -- the component
 # counterpart of innerHTML. Only a non-literal payload is flagged; a hardcoded
 # string is inert server-controlled content.
@@ -280,6 +289,16 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             if not _static_literal_arg(arg):
                 findings.append(hit(lineno, "xss.script_src_injection", "脚本源注入",
                                     "动态赋值给 script/iframe 的 src 可加载恶意脚本",
+                                    "固定允许的静态源，服务端校验 URL 白名单"))
+        # jQuery getScript: fetches and evaluates a remote script. The URL is
+        # captured so a hardcoded literal stays quiet; a dynamic URL is
+        # attacker-influenceable and loads remote code.
+        if m := RE_GETSCRIPT.search(line):
+            url = m.group(1).strip().rstrip(";")
+            if not _static_literal_arg(url):
+                findings.append(hit(lineno, "xss.script_src_injection", "脚本源注入",
+                                    "$.getScript 动态加载并执行远程脚本，URL 用户可控时"
+                                    "可加载恶意代码",
                                     "固定允许的静态源，服务端校验 URL 白名单"))
         # String-form inline event handlers via setAttribute("onclick", ...).
         if RE_SETATTR_EVENT.search(line):
