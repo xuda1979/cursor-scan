@@ -156,6 +156,61 @@ class TestExecCommand:
         assert f.message and f.fix
 
 
+class TestContextualFragment:
+    """Range.createContextualFragment(html) parses its argument into DOM
+    nodes -- a Range-based HTML-parsing sink (sibling of insertAdjacentHTML,
+    OWASP DOM-XSS). A dynamic argument flags; hardcoded literals stay inert."""
+
+    def test_range_create_contextual_fragment_flags(self):
+        found = _analyze("range.createContextualFragment(userHtml);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_any_receiver_flags(self):
+        # The sink is the method itself, not the Range it is called on.
+        found = _analyze("selectedRange.createContextualFragment(payload);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_call_result_argument_flags(self):
+        found = _analyze("range.createContextualFragment(buildCard(user));\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_concatenation_argument_flags(self):
+        found = _analyze("range.createContextualFragment('<p>' + msg + '</p>');\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_interpolated_template_argument_flags(self):
+        found = _analyze("range.createContextualFragment(`<li>${name}</li>`);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_identifier_variable_argument_flags(self):
+        # A bare variable may hold attacker-controlled HTML markup.
+        found = _analyze("range.createContextualFragment(markup);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_static_literal_argument_is_quiet(self):
+        # A hardcoded chunk is inert static content.
+        assert _analyze("range.createContextualFragment('<b>static</b>');\n") == []
+
+    def test_double_quoted_static_is_quiet(self):
+        assert _analyze("range.createContextualFragment(\"<p>static</p>\");\n") == []
+
+    def test_no_argument_is_quiet(self):
+        assert _analyze("range.createContextualFragment();\n") == []
+
+    def test_unrelated_range_method_is_quiet(self):
+        # Non-HTML-parsing Range methods carry no markup parsing surface.
+        assert _analyze("range.setStart(anchor, 0);\n") == []
+        assert _analyze("range.cloneContents();\n") == []
+
+    def test_finding_carries_metadata(self):
+        found = _analyze("range.createContextualFragment(userHtml);\n")
+        assert len(found) == 1
+        f = found[0]
+        assert f.dimension == "xss"
+        assert f.severity == "medium"
+        assert f.message and f.fix
+
+
 class TestJQueryInsertFamily:
     """jQuery HTML-insertion methods beyond .html(): .append/.prepend/.after/
     .before/.replaceWith (shared names that are text-safe on plain DOM nodes,

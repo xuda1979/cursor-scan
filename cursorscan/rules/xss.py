@@ -172,6 +172,15 @@ RE_EXECCOMMAND_INSERTHTML = re.compile(
     re.I,
 )
 
+# range.createContextualFragment(html) parses its argument into DOM nodes --
+# a Range-based HTML-parsing sink (sibling of insertAdjacentHTML, OWASP
+# DOM-XSS). The argument is captured so a hardcoded literal stays inert
+# (static server-controlled content); any dynamic value is
+# attacker-influenceable and builds DOM nodes from raw HTML.
+RE_CONTEXTUAL_FRAGMENT = re.compile(
+    r"""\.createContextualFragment\s*\(\s*([^)]*)""",
+)
+
 # ``$.getScript(url)`` / ``jQuery.getScript(url)`` fetch a remote script and
 # evaluate it -- the jQuery HTML-script injection sink. The URL is captured so
 # a hardcoded CDN literal stays quiet (ordinary static include); a variable,
@@ -336,6 +345,17 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
                                     "execCommand('insertHTML', ...) 将参数解析为 HTML "
                                     "写入 DOM，用户输入可触发 XSS",
                                     "改用 textContent / insertAdjacentText，或先做 HTML 转义"))
+        # Range.createContextualFragment(html) parses raw HTML into DOM nodes.
+        # The argument is captured; a hardcoded literal is inert static content,
+        # any dynamic value is attacker-influenceable.
+        if m := RE_CONTEXTUAL_FRAGMENT.search(line):
+            payload = (m.group(1) or "").strip().rstrip(";")
+            if payload and not _static_literal_arg(payload):
+                findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
+                                    "createContextualFragment 将参数解析为 HTML 写入 "
+                                    "DOM，用户输入可触发 XSS",
+                                    "使用 textContent / document.createElement，或先做 "
+                                    "HTML 转义"))
         # Svelte {@html ...} raw-insertion block (works on .svelte files).
         if RE_SVELTE_HTML.search(line):
             rest = line.split("{@html", 1)[1].split("}", 1)[0].strip()
