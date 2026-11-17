@@ -94,6 +94,69 @@ class TestJSTemplateLiteralConcat:
         assert finds == []
 
 
+class TestJSShellSlotAwareConcat:
+    """exec-family shell injection is slot-aware: a concat in the *command
+    string* reaches a shell (exec/execSync always; spawn/Promise-based
+    spawnSync/fork/execa only with ``shell:`` or an explicit ``sh -c`` style
+    command line), while a concat buried in the *argument array* of a plain
+    spawn arrives as a separate argv entry and stays quiet."""
+
+    def test_exec_concat_flags(self):
+        finds = _js('exec("ping -c 1 " + host)\n')
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_execa_concat_flags(self):
+        finds = _js('execa("ls " + dir)\n')
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_spawn_single_string_command_flags(self):
+        # A single string to spawn goes through a shell for parsing.
+        finds = _js('spawn("ping " + host)\n')
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_spawn_sh_c_dynamic_flags(self):
+        # An explicit sh -c line is shell interpretation even without shell:.
+        finds = _js("spawn('/bin/sh', ['-c', 'ls ' + dir])\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_spawn_bash_c_dynamic_flags(self):
+        finds = _js("spawn('bash', ['-c', 'sudo ' + payload])\n")
+        assert [(f.rule_id, f.line) for f in finds] == [
+            ("injection.shell_concat", 1)]
+
+    def test_spawn_sh_c_static_is_quiet(self):
+        # Static command line through sh is not an injection.
+        finds = _js("spawn('sh', ['-c', 'echo hi'])\n")
+        assert finds == []
+
+    def test_spawn_shell_true_with_concat_flags(self):
+        finds = _js("cp.spawn('echo ' + msg, [], { shell: true })\n")
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_spawn_shell_true_static_is_quiet(self):
+        # Static args with shell on: nothing is concat-built, so quiet.
+        finds = _js("spawn('ls', ['-la'], { shell: true })\n")
+        assert finds == []
+
+    def test_spawn_arglist_concat_is_quiet(self):
+        # Args reach the child as separate argv entries: no metacharacter
+        # expansion, even though the array literal contains a concat.
+        finds = _js("spawn('tar', ['czf', dir + '.tgz', 'src'])\n")
+        assert finds == []
+
+    def test_spawn_static_is_quiet(self):
+        finds = _js("spawn('ping', ['-c', '1', '127.0.0.1'])\n")
+        assert finds == []
+
+    def test_spawn_sync_arglist_concat_is_quiet(self):
+        finds = _js("cp.spawnSync('echo', [prefix + name])\n")
+        assert finds == []
+
+
 class TestJSCrossLineSqlConcat:
     """JS `const q = 'SELECT ...' + input` built on one line and handed to a
     DB driver on a later line.  The AST call-walker only sees the bare

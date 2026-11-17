@@ -581,15 +581,29 @@ def analyze_jsts(path, src, findings):
         # fork are the synchronous / child forms of the same commands and
         # carry the identical injection surface; ``require('child_process')
         # .execSync(...)`` surfaces as fn ending in ``.execSync``.
+        #
+        # Which slot the concat lands in decides whether a shell is involved:
+        # exec/execSync always interpret their string command in a shell,
+        # while spawn/spawnSync/fork/execa only do so with shell:true or an
+        # explicit ``sh -c`` style command line.  A concat buried in the
+        # *argument array* of a plain spawn reaches the child as a separate
+        # argv entry (no metacharacter expansion), so it must not fire shell
+        # injection -- only shell-involved or concat-built command strings.
         if (fn in ("exec", "execa", "spawn", "execSync", "spawnSync", "fork")
                 or fn.endswith(".exec") or fn.endswith(".spawn")
                 or fn.endswith(".execSync") or fn.endswith(".spawnSync")
                 or fn.endswith(".fork")):
+            first = _first_positional(call, bsrc)
+            cmd = first[0] if first is not None else ""
+            cmd_dynamic = _has_concat(cmd)
+            sh_dash_c = _JS_SHELL_BIN.search(cmd) is not None \
+                and _JS_DASH_C.search(args) is not None \
+                and _has_concat(args)
             if "shell" in args.lower() and _has_concat(args):
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                     f"{fn} 开启 shell 并拼接命令: {args}", "使用参数列表", "injection"))
-            elif _has_concat(args):
+            elif cmd_dynamic or sh_dash_c:
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                     f"命令字符串由拼接构造: {args}", "使用参数列表", "injection"))
@@ -655,6 +669,12 @@ def _js_positional_args(call, bsrc):
 
 
 _JS_PLAIN_STRING = re.compile(r"^(['\"])(.*?)\1$", re.S)
+
+# Shell-interpreting binaries passed to spawn-style calls.  ``bash -c`` /
+# ``sh -c`` make spawn execute a command line through a shell even though
+# the API call itself carries no ``shell:`` option.
+_JS_SHELL_BIN = re.compile(r"(?i)\b(sh|bash|zsh|dash)\b")
+_JS_DASH_C = re.compile(r"-c\b")
 
 
 def _first_positional(call, bsrc):
