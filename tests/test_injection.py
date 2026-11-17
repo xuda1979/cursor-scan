@@ -1,5 +1,4 @@
 """Unit tests for the cross-language injection regex fallbacks.
-
 The line-scanner regex rules in cursorscan/rules/injection.py also cover PHP
 (`.` concat), Java (`+` concat), Ruby (`+` concat / `#{}` interpolation),
 Go (`+` concat / fmt.Sprintf verbs), C# (`+` concat / `$"..."` interpolated
@@ -11,7 +10,9 @@ single-string `system`/`exec`, backticks, `qx{}`) and Lua (`..` concat /
 `io.popen` command strings) and C/C++ (`.c/.h/.cpp/.hpp`: `+` concat /
 `sprintf`-verb literals into `sqlite3_exec` / `mysql_query` /
 `mysql_real_query`, `sprintf`-built / `+`-concatenated commands into
-`system` / `popen`)
+`system` / `popen`) and Swift (`+` concat / string-interpolation templates
+into SQLite.swift / FMDB receivers and `sqlite3_exec`, `Process` `/bin/sh -c`
+/ `system()` commands built with concat / interpolation)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -932,6 +933,135 @@ class TestCppShellConcat:
     def test_snprintf_without_receiver_is_quiet(self):
         assert self._reg(
             'snprintf(cmd, sizeof cmd, "ls -la %s", dir);\n'
+        ) == []
+
+
+class TestSwiftSqlConcat:
+    """Regex-layer lock for Swift SQL receivers: SQLite.swift / FMDB style
+    ``db.execute`` / ``prepare`` / ``run`` / ``scalar`` / ``executeUpdate`` /
+    ``executeQuery`` / ``executeStatements`` (and the C ``sqlite3_exec`` API)
+    handed a SQL-keyword literal spliced with the `+` operator or built with
+    ``\\(...)`` string interpolation flags ``injection.sql_concat``;
+    parameterized ``?`` placeholders, binding-array calls and static literals
+    stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.swift", code)]
+
+    def test_execute_concat_flags(self):
+        assert self._reg(
+            'db.execute("SELECT * FROM users WHERE name = " + name)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_interpolation_flags(self):
+        assert self._reg(
+            'db.execute("SELECT id FROM accounts WHERE owner = \\(owner)")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_update_concat_flags(self):
+        assert self._reg(
+            'database.executeUpdate("UPDATE accounts SET bal = " + amt, withArgumentsIn: [])\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_prepare_concat_flags(self):
+        assert self._reg(
+            'let stmt = try db.prepare("SELECT " + cols + " FROM reports")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_run_concat_flags(self):
+        assert self._reg(
+            'try db.run("UPDATE t SET x = " + v)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_exec_concat_flags(self):
+        assert self._reg(
+            'sqlite3_exec(db, "DROP TABLE " + tbl, nil, nil, nil)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_parameterized_is_quiet(self):
+        assert self._reg(
+            'db.execute("SELECT * FROM users WHERE id = ?", id)\n'
+        ) == []
+
+    def test_prepare_parameterized_is_quiet(self):
+        assert self._reg(
+            'db.prepare("SELECT * FROM users WHERE id = ?")\n'
+        ) == []
+
+    def test_run_bindings_is_quiet(self):
+        assert self._reg(
+            'try db.run("INSERT INTO t (a) VALUES (?)", parameters: [x])\n'
+        ) == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg(
+            'db.execute("SELECT COUNT(*) FROM logs")\n'
+        ) == []
+
+    def test_plain_interpolation_assignment_is_quiet(self):
+        assert self._reg(
+            'let s = "SELECT * FROM users WHERE name = \\(name)"\n'
+        ) == []
+
+
+class TestSwiftShellConcat:
+    """Regex-layer lock for Swift shell execution: ``Process`` / ``NSTask``
+    ``arguments`` arrays launching a shell with ``-c`` as the command flag
+    (either in first position or after a ``sh``/``bash``/``zsh``/``dash``
+    binary) and a `+`-concatenated or ``\\(...)``-interpolated command
+    string, plus the C ``system()`` call with a concatenated / interpolated
+    command, flags ``injection.shell_concat``; argument-list launches,
+    static shell commands and static ``system()`` calls stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.swift", code)]
+
+    def test_process_shell_c_concat_flags(self):
+        assert self._reg(
+            'process.arguments = ["/bin/sh", "-c", "rm -rf " + path]\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_sh_c_interpolation_flags(self):
+        assert self._reg(
+            'p.arguments = ["sh", "-c", "echo hello \\(user)"]\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_bash_c_concat_flags(self):
+        assert self._reg(
+            'process.arguments = ["/bin/bash", "-c", "tar czf " + dir]\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_c_first_concat_flags(self):
+        assert self._reg(
+            'arguments: ["-c", "ls -la " + dir]\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_concat_flags(self):
+        assert self._reg(
+            'system("rm -rf /tmp/" + path)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_interpolation_flags(self):
+        assert self._reg(
+            'system("chown \\(who) /var/log/app")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            'process.arguments = ["ls", "-la", dir]\n'
+        ) == []
+
+    def test_static_shell_c_is_quiet(self):
+        assert self._reg(
+            'p.arguments = ["/bin/sh", "-c", "echo hello"]\n'
+        ) == []
+
+    def test_static_system_is_quiet(self):
+        assert self._reg('system("true")\n') == []
+
+    def test_launch_path_is_quiet(self):
+        assert self._reg(
+            'process.launchPath = "/bin/ls"\n'
         ) == []
 
 

@@ -392,6 +392,40 @@ RE_SHELL_CONCAT_CPP = re.compile(
     r"\s*;\s*(?:system|popen)\s*\(",
     re.I,
 )
+# Swift (.swift): SQLite.swift / FMDB receivers (execute / prepare / run /
+# scalar / executeUpdate / executeQuery / executeStatements) handed a query
+# literal spliced with the `+` operator or built with `\(...)` string
+# interpolation, plus the C API sqlite3_exec with a `+`-concatenated query.
+# Parameterized `?` placeholders, selection args and static literals stay
+# quiet.  Shell forms: Process / NSTask `arguments` arrays launching a shell
+# with `-c` as the first element and a `+`-concatenated / `\(...)`-interpolated
+# command string, plus the C `system()` function taking a concatenated /
+# interpolated command; static command strings stay quiet.
+RE_SQL_CONCAT_SWIFT = re.compile(
+    r"\b[a-zA-Z_]\w*\s*[.:]\s*(?:execute|prepare|run|scalar|executeUpdate|"
+    r"executeQuery|executeStatements)\s*\(\s*"
+    r"(?:"
+    r"(?:" + _SQL_STR + r")\s*\+"
+    + r'|"[^"]*(?:' + _SQL_KW + r')[^"]*\\\([^"]*"'
+    + r")"
+    + r"|\bsqlite3_exec\s*\(\s*[^,]+,\s*"
+    + r"(?:" + _SQL_STR + r")\s*\+",
+    re.I,
+)
+# A dynamic shell command argument: a quoted string spliced with `+`, or a
+# double-quoted string containing a `\(...)` interpolation (the only braces
+# that expand at runtime in Swift).  Static literals stay quiet.
+_SWIFT_DYN_ARG = r'(?:"[^"]*"\s*\+|"[^"]*\\\([^"]*")'
+RE_SHELL_CONCAT_SWIFT = re.compile(
+    r"\barguments\s*(?::\s*|\s*=\s*)\s*\[\s*(?:"
+    r"[\"']-c[\"']\s*,\s*" + _SWIFT_DYN_ARG
+    + r"|[\"'](?:/bin/)?(?:sh|bash|zsh|dash)[\"']\s*,\s*[\"']-c[\"']\s*,\s*"
+    + _SWIFT_DYN_ARG
+    + r")"
+    + r"|\bsystem\s*\(\s*"
+    + _SWIFT_DYN_ARG,
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -410,6 +444,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     py_ext = ext in ("py", "pyi")
     js_ext = ext in ("js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts")
     cpp_ext = ext in ("c", "h", "cc", "cpp", "cxx", "hpp", "hxx")
+    swift_ext = ext == "swift"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -500,6 +535,15 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用预编译语句 (sqlite3_prepare / mysql_stmt)"))
         if cpp_ext and RE_SHELL_CONCAT_CPP.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Swift SQLite.swift / FMDB receivers with `+` concatenation or
+        # `\(...)` string interpolation, and Process /bin/sh -c / system()
+        # shell commands built with a concatenated or interpolated string.
+        if swift_ext and RE_SQL_CONCAT_SWIFT.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if swift_ext and RE_SHELL_CONCAT_SWIFT.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
