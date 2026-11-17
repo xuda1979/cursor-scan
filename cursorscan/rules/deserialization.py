@@ -49,6 +49,31 @@ RE_YAML_UNSAFE = re.compile(
     # explicit arbitrary-object constructor in both ecosystems).
     r"\b(?:yaml|YAML|Psych)\.unsafe_load\b"
 )
+# PHP's libxml-based XML sinks (CWE-611 XXE): simplexml loaders, DOMDocument
+# loadXML/load, and xml_parse() all resolve external entities (unless
+# libxml_disable_entity_loader / LIBXML_NONET were opted in, which is rare and
+# itself a review signal). DOMDocument instances are held in variables, so the
+# receiver form is matched: ``->loadXML`` is DOMDocument-specific and always
+# an XML load; a bare ``->load`` additionally requires a document-hinted
+# receiver ($dom/$doc/$document/$xml...), keeping generic database/asset
+# loaders (``$db->load``) quiet. The libxml_use_internal_errors() bookkeeping
+# calls are not document loads and stay quiet.
+RE_PHP_XXE = re.compile(
+    r"(?:simplexml_load_(?:file|string)"
+    r"|\$\w+\s*->\s*loadXML"
+    r"|\$(?:dom|doc|document|xml)\w*\s*->\s*load"
+    r"|xml_parse\s*\(\s*xml_parser_create)\s*\(",
+)
+# Java's XML factory sinks (CWE-611 XXE): DocumentBuilderFactory / SAXParser
+# Factory / TransformerFactory / XMLInputFactory / SchemaFactory built with
+# newInstance()/newFactory() parse DTDs that can read local files unless the
+# well-known FEATURE_SECURE_PROCESSING / external-DTD settings are explicitly
+# applied. The builder objects themselves are the sink root -- .parse(...)
+# calls made on them later are the same object and need no separate rule.
+RE_JAVA_XXE = re.compile(
+    r"\b(?:DocumentBuilderFactory|SAXParserFactory|TransformerFactory"
+    r"|XMLInputFactory|SchemaFactory)\s*\.(?:newInstance|newFactory)\s*\(",
+)
 RE_YAML_LOAD = re.compile(
     r"\b(yaml\.load|yaml\.load_all)\s*\(.*"
 )
@@ -144,6 +169,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         elif RE_YAML_LOAD.search(raw) and not RE_YAML_SAFE_LOADER.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
+        if RE_PHP_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "PHP libxml 解析默认解析外部实体，可读取本地文件/内网探测",
+                                "libxml_disable_entity_loader(true) 或使用 LIBXML_NONET"))
+        if RE_JAVA_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "Java XML 解析器默认解析 DTD 外部实体，可读取本地文件/内网探测",
+                                "设置 FEATURE_SECURE_PROCESSING 并禁用 external DTD"))
         if RE_EVAL.search(raw):
             findings.append(hit(lineno, "deser.eval", "eval 外部输入",
                                 "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))

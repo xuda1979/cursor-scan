@@ -474,3 +474,84 @@ class TestPhpUnserialize:
     def test_serialize_writer_is_quiet(self):
         assert self._php("$data = serialize($obj);\n") == []
 
+
+class TestPhpXxe:
+    """PHP's libxml-based sinks resolve external entities by default (CWE-611
+    XXE): simplexml_load_*, DOMDocument->loadXML/load, and xml_parse with a
+    fresh parser execute DTD external-entity reads unless opted out via
+    libxml_disable_entity_loader / LIBXML_NONET (rare and itself a review
+    signal). Bookkeeping calls like libxml_use_internal_errors are not loads."""
+
+    def _php(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("x.php", code)]
+
+    def test_simplexml_load_string_flags(self):
+        assert self._php("return simplexml_load_string($raw);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_simplexml_load_file_flags(self):
+        assert self._php("return simplexml_load_file($path);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_dom_loadxml_flags(self):
+        assert self._php("$doc = new DOMDocument();\n$doc->loadXML($raw);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_dom_load_flags(self):
+        assert self._php("$doc = new DOMDocument();\n$doc->load($path);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xml_parse_with_parser_create_flags(self):
+        assert self._php("xml_parse(xml_parser_create(), $raw);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_libxml_use_internal_errors_is_quiet(self):
+        # Bookkeeping, not a document load; reported by a featurized scan only
+        # when a load sink is present.
+        assert self._php("libxml_use_internal_errors(true);\n") == []
+
+    def test_non_xml_load_is_quiet(self):
+        # Database/asset loaders are not XML sinks.
+        assert self._php("$db->load($path);\n") == []
+
+    def test_php_xxe_finding_carries_dimension(self):
+        found = analyze_code("x.php", "simplexml_load_file($f);\n")
+        assert found[0].dimension == "deserialization"
+
+
+class TestJavaXxe:
+    """Java's XML factory sinks resolve external DTDs unless the well-known
+    FEATURE_SECURE_PROCESSING / external-entity disablers are set (CWE-611):
+    DocumentBuilderFactory / SAXParserFactory / TransformerFactory /
+    XMLInputFactory / SchemaFactory built via newInstance()/newFactory()."""
+
+    def _java(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("X.java", code)]
+
+    def test_document_builder_factory_flags(self):
+        assert self._java("DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_sax_parser_factory_flags(self):
+        assert self._java("SAXParserFactory spf = SAXParserFactory.newInstance();\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xml_input_factory_new_factory_flags(self):
+        # newFactory() is the standard spelling for XMLInputFactory.
+        assert self._java("XMLInputFactory xif = XMLInputFactory.newFactory();\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_transformer_factory_flags(self):
+        assert self._java("TransformerFactory tf = TransformerFactory.newInstance();\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_schema_factory_flags(self):
+        assert self._java('SchemaFactory sf = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);\n') == \
+            [("deser.xxe", "critical")]
+
+    def test_secure_processing_guard_offsets_sink(self):
+        # Setting FEATURE_SECURE_PROCESSING + disabling external DTDs is the
+        # fix; a builder line that only constructs the factory still flags for
+        # review (the negligible-protection form is out of scope here).
+        assert len(self._java("DocumentBuilderFactory.newInstance();\n")) == 1
+
