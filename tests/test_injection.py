@@ -3,10 +3,11 @@
 The line-scanner regex rules in cursorscan/rules/injection.py also cover PHP
 (`.` concat), Java (`+` concat), Ruby (`+` concat / `#{}` interpolation),
 Go (`+` concat / fmt.Sprintf verbs), C# (`+` concat / `$"..."` interpolated
-templates) and Kotlin (`+` concat) for both SQL string-concatenation and
-shell-command concatenation.  These tests lock in the dynamic forms as
-findings and the static/parameterized/argument-list forms as quiet
-negatives.
+templates), Kotlin (`+` concat) and Rust (`format!` / `format_args!` /
+`fmt::format` interpolation, `+` concat, `Command::new("sh").arg("-c")`)
+for both SQL string-concatenation and shell-command concatenation.  These
+tests lock in the dynamic forms as findings and the static/parameterized/
+argument-list forms as quiet negatives.
 """
 
 from __future__ import annotations
@@ -519,6 +520,119 @@ class TestKotlinShellConcat:
 
     def test_static_runtime_exec_is_quiet(self):
         assert self._reg('Runtime.getRuntime().exec("ls -la")\n') == []
+
+
+class TestRustSqlConcat:
+    """Regex-layer lock for the Rust SQL receivers (rusqlite / sqlx /
+    tokio-postgres): ``format!`` / ``format_args!`` / ``fmt::format``
+    interpolated SQL literals and `+` concatenation flag
+    ``injection.sql_concat``; parameterized `?` placeholders and bind/list
+    forms stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.rs", code)]
+
+    def test_execute_format_interpolation_flags(self):
+        assert self._reg(
+            'conn.execute(&format!("SELECT * FROM users WHERE name = \'{name}\'"), [])'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_format_braced_interpolation_flags(self):
+        assert self._reg(
+            'conn.execute(&format!("SELECT id FROM t WHERE a = {}", id))'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_format_args_flags(self):
+        assert self._reg(
+            '''sqlx::query(&format_args!("SELECT x FROM t WHERE b = '{b}'")).fetch_all(&pool)'''
+        ) == [("injection.sql_concat", 1)]
+
+    def test_fmt_format_module_flags(self):
+        assert self._reg(
+            '''conn.query(&fmt::format(format_args!("UPDATE t SET y = {}", y)))?'''
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_row_plus_concat_flags(self):
+        assert self._reg(
+            'conn.query_row("SELECT z FROM t WHERE c = " + field, [], |r| Ok(r))'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_format_flags(self):
+        assert self._reg(
+            'let q = format!("DELETE FROM logs WHERE id = {}", id);'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_sql_to_string_concat_flags(self):
+        assert self._reg(
+            'let q = "UPDATE t SET ".to_string() + cols + " WHERE id = 1";'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            'conn.execute("SELECT * FROM users WHERE name = ?", [name])'
+        ) == []
+
+    def test_bind_list_is_quiet(self):
+        assert self._reg(
+            'sqlx::query("SELECT * FROM t WHERE id = $1").bind(id).fetch_one(&pool)'
+        ) == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg('conn.execute("SELECT 1")') == []
+
+    def test_format_without_sql_keyword_is_quiet(self):
+        assert self._reg('conn.execute(&format!("hello {}", name))') == []
+
+    def test_non_receiver_format_call_is_quiet(self):
+        # Rust output macros like println! / write! never reach a driver.
+        assert self._reg('println!("SELECT count FROM x where a = {}", n)') == []
+
+
+class TestRustShellConcat:
+    """Regex-layer lock for Rust ``std::process::Command`` shell launches:
+    an explicit `-c` with a format!-built or concatenated command string
+    flags ``injection.shell_concat``; argv-list and static `-c` forms stay
+    quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.rs", code)]
+
+    def test_sh_c_format_flags(self):
+        assert self._reg(
+            'Command::new("sh").arg("-c").arg(format!("rm -rf {}", dir)).output()'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_bash_c_concat_flags(self):
+        assert self._reg(
+            r'Command::new("/bin/bash").arg("-c").arg("ls " + dir).status()'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_cmd_c_to_string_concat_flags(self):
+        assert self._reg(
+            r'Command::new("cmd").arg("/C").arg("del " + f + "\\\"").output()'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_arg_list_form_is_quiet(self):
+        assert self._reg(
+            'Command::new("ls").arg(dir).output()'
+        ) == []
+
+    def test_static_sh_c_is_quiet(self):
+        assert self._reg(
+            'Command::new("sh").arg("-c").arg("true").output()'
+        ) == []
+
+    def test_sh_without_dash_c_is_quiet(self):
+        # ``sh file.sh`` executes a script file, not a shell command line.
+        assert self._reg(
+            'Command::new("sh").arg("build.sh").status()'
+        ) == []
+
+    def test_non_shell_binary_dash_c_is_quiet(self):
+        # ``ping -c 1 ...``: the -c is ping's count flag, not a shell.
+        assert self._reg(
+            'Command::new("ping").arg("-c").arg("1").arg("127.0.0.1").status()'
+        ) == []
 
 
 class TestJSSqlConcatRegex:

@@ -273,6 +273,46 @@ RE_SHELL_CONCAT_KT = re.compile(
     r"|ProcessBuilder\s*\(\s*[\"'](?:/bin/sh|/bin/bash|/bin/zsh|sh|bash)[\"']\s*,\s*[\"']-c[\"']\s*,\s*(?:\"[^\"]*\"|'[^']*')\s*\+",
     re.I,
 )
+# Rust: rusqlite / sqlx / tokio-postgres execute/query receivers interpolating
+# a string literal with `format!`/`format_args!` verbs (db.execute(&format!(
+# "SELECT .. {}", id)) feeds the formatted SQL straight into the driver), the
+# `+` string-concat form into the same receivers, and the `println!`-style
+# bare `format!` assignment (`let q = format!("SELECT ... {}", id);` followed
+# on a later line by a driver call the line-scanner never sees, mirroring
+# RE_SQL_FSTRING_ASSIGN / RE_SQL_FMT_ASSIGN_PY).  Static literals,
+# parameterized `?` placeholders and `.bind(...)`/`(?,).bind()` arg lists stay
+# quiet.  Shell forms: std::process::Command launching an explicit
+# `sh`/`cmd` + `-c` with a concatenated or format!-built command string; the
+# `-c` requirement mirrors the Go rule (Command::new("sh") without `-c` is an
+# argv file, never a shell).  Command/Child arg-list forms and the `-c`
+# flag of non-shell binaries stay quiet.
+RE_SQL_CONCAT_RS = re.compile(
+    r"(?:\.|::)(?:execute|query|query_one|query_row|query_map|query_as|"
+    r"query_scalar|fetch_one|fetch_optional|fetch_all)\s*\(\s*(?:&?\s*\(?\s*)?(?:"
+    r"format!\s*\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}]*\}"
+    r"|fmt::format\s*\(\s*(?:format_args!\s*\(\s*&?\s*)?\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}]*\}"
+    r"|format_args!\s*\(\s*\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}]*\}"
+    r"|(?:" + _SQL_STR + r")\s*\+"
+    r"|(?:" + _SQL_STR + r")\s*\.to_string\s*\(\s*\)\s*\+"
+    r")",
+    re.I,
+)
+RE_SQL_FMT_ASSIGN_RS = re.compile(
+    r"^\s*(?:let|let mut)\s+[A-Za-z_]\w*\s*=\s*("
+    r"format!\s*\(\s*\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\{[^}]*\}"
+    r'|"[^"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^"]*"\s*\.to_string\s*\(\s*\)\s*\+'
+    r"|'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^']*'\s*\.to_string\s*\(\s*\)\s*\+"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_RS = re.compile(
+    r"(?:Command::new|Command::from)\s*\(\s*[\"'](?:sh|bash|zsh|dash|/bin/sh|/bin/bash|/bin/zsh|/bin/dash|cmd|cmd\.exe)[\"']\s*\)\s*\.arg\s*\(\s*[\"']/?-?c[\"']\s*\)\s*\.arg\s*\(\s*(?:&?\s*\(?\s*)?(?:"
+    r"format!\s*\(\s*\"[^\"]*\{[^}]*\}"
+    r"|(?:\"[^\"]*\"|'[^']*')\s*\+"
+    r"|(?:\"[^\"]*\"|'[^']*')\s*\.to_string\s*\(\s*\)\s*\+"
+    r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -341,6 +381,10 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if ext == "kt" and RE_SQL_CONCAT_KT.search(line):
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (bind 变量)"))
+        if ext == "rs" and (RE_SQL_CONCAT_RS.search(line)
+                            or RE_SQL_FMT_ASSIGN_RS.search(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if ext == "go" and RE_SHELL_CONCAT_GO.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
@@ -348,6 +392,9 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if ext == "kt" and RE_SHELL_CONCAT_KT.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if ext == "rs" and RE_SHELL_CONCAT_RS.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
