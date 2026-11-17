@@ -284,18 +284,38 @@ def analyze_python(path, src, findings):
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
                     f"SQL 通过字符串拼接: {args}", "使用参数化查询 (?, %s)", "injection"))
         if fn in ("os.system", "os.popen") or fn.startswith("subprocess."):
+            # Which slot the concat lands in decides whether a shell is
+            # involved: an explicit shell=True always interprets its command
+            # through a shell, and a *string* command (os.system / os.popen /
+            # subprocess with a single string argument) is parsed by a shell
+            # too.  `sh -c`/`bash -c` handed as the argv list also reaches a
+            # shell.  But a concat buried in the *argv list* of a shell-less
+            # subprocess call is passed as separate arguments (no metachar
+            # expansion), so it must not fire shell injection -- only
+            # shell-involved or concat-built command strings.
             if "shell=True" in args or "shell = True" in args:
                 if _has_concat(args):
                     findings.append(_ev(
                         "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                         f"subprocess 开放 shell 且拼接命令: {args}", "传入参数列表, 关闭 shell", "injection"))
-            # non-shell but still uses string command with concat -> command injection
-            if _has_concat(args) and fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
-                                            "subprocess.check_output", "subprocess.check_call",
-                                            "os.system", "os.popen"):
-                findings.append(_ev(
-                    "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
-                    f"命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
+            elif fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
+                        "subprocess.check_output", "subprocess.check_call",
+                        "os.system", "os.popen"):
+                first = _first_positional(call, bsrc)
+                cmd = first[0] if first is not None else ""
+                arg_list = _first_arg_is_list(call, bsrc)
+                if not arg_list and _has_concat(cmd):
+                    findings.append(_ev(
+                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                        f"命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
+                elif arg_list and _SHELL_BIN.search(cmd) is not None \
+                        and _SHELL_DASH_C.search(args) is not None \
+                        and _has_concat(args):
+                    # argv list ``["sh", "-c", "ls " + d]`` -- the command
+                    # line is built by concat and then shell-interpreted.
+                    findings.append(_ev(
+                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                        f"sh -c 命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
 
         # ------ permissions ------
         if fn == "os.chmod" or "chmod" in fn:
@@ -596,8 +616,8 @@ def analyze_jsts(path, src, findings):
             first = _first_positional(call, bsrc)
             cmd = first[0] if first is not None else ""
             cmd_dynamic = _has_concat(cmd)
-            sh_dash_c = _JS_SHELL_BIN.search(cmd) is not None \
-                and _JS_DASH_C.search(args) is not None \
+            sh_dash_c = _SHELL_BIN.search(cmd) is not None \
+                and _SHELL_DASH_C.search(args) is not None \
                 and _has_concat(args)
             if "shell" in args.lower() and _has_concat(args):
                 findings.append(_ev(
@@ -670,11 +690,12 @@ def _js_positional_args(call, bsrc):
 
 _JS_PLAIN_STRING = re.compile(r"^(['\"])(.*?)\1$", re.S)
 
-# Shell-interpreting binaries passed to spawn-style calls.  ``bash -c`` /
-# ``sh -c`` make spawn execute a command line through a shell even though
-# the API call itself carries no ``shell:`` option.
-_JS_SHELL_BIN = re.compile(r"(?i)\b(sh|bash|zsh|dash)\b")
-_JS_DASH_C = re.compile(r"-c\b")
+# Shell-interpreting binaries handed to subprocess/spawn-style calls.  ``bash
+# -c`` / ``sh -c`` make the call execute a command line through a shell even
+# though it carries no ``shell:``/``shell=True`` option (both the JS spawn
+# family and the Python subprocess family).
+_SHELL_BIN = re.compile(r"(?i)\b(sh|bash|zsh|dash)\b")
+_SHELL_DASH_C = re.compile(r"-c\b")
 
 
 def _first_positional(call, bsrc):
@@ -691,6 +712,14 @@ def _first_positional(call, bsrc):
     if not named:
         return None
     return _bstr(bsrc, named[0].start_byte, named[0].end_byte), named[0].type
+
+
+def _first_arg_is_list(call, bsrc) -> bool:
+    """True when the first positional argument is a list literal (the argv
+    form of subprocess / spawn).  Python parses ``["ls", d]`` with node type
+    ``list``; JS/TS parse array literals as ``array``."""
+    first = _first_positional(call, bsrc)
+    return first is not None and first[1] in ("list", "array")
 
 
 def _js_plain_string(txt: str) -> str | None:

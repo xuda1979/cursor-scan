@@ -79,6 +79,65 @@ class TestPythonShellConcatGaps:
         assert finds == []
 
 
+class TestPythonShellSlotAwareConcat:
+    """subprocess shell injection is slot-aware (mirror of the JS exec-family
+    rule): a concat in a *string* command (os.system/os.popen, or a single
+    string argument to subprocess) always reaches a shell and flags;
+    shell=True flags; an explicit ``sh -c``/``bash -c`` argv list with a
+    concat-built command flags.  But a concat inside the *argv list* of a
+    shell-less subprocess call is passed as separate arguments (no
+    metacharacter expansion) and stays quiet."""
+
+    def test_list_concat_is_quiet(self):
+        finds = _py('subprocess.run(["grep", prefix + suffix, f])\n')
+        assert finds == []
+
+    def test_call_list_concat_is_quiet(self):
+        finds = _py('subprocess.call(["echo", a + b])\n')
+        assert finds == []
+
+    def test_check_output_list_concat_is_quiet(self):
+        finds = _py('subprocess.check_output(["git", "log", msg + "x"])\n')
+        assert finds == []
+
+    def test_popen_list_concat_is_quiet(self):
+        finds = _py('subprocess.Popen(["ls", user_dir + ".csv"])\n')
+        assert finds == []
+
+    def test_fstring_inside_list_is_quiet(self):
+        finds = _py('subprocess.run([f"ls {d}"])\n')
+        assert finds == []
+
+    def test_string_command_concat_flags(self):
+        finds = _py('subprocess.run("ls " + path)\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_call_string_concat_flags(self):
+        finds = _py('subprocess.call("sudo " + payload)\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_sh_dash_c_dynamic_flags(self):
+        finds = _py('subprocess.Popen(["sh", "-c", "ls " + d])\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_bash_dash_c_dynamic_flags(self):
+        finds = _py('subprocess.run(["bash", "-c", "sudo " + payload])\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_sh_dash_c_static_is_quiet(self):
+        finds = _py('subprocess.Popen(["sh", "-c", "echo hi"])\n')
+        assert finds == []
+
+    def test_shell_true_flags_once(self):
+        # shell=True + concat: exactly one finding, not the historical double.
+        finds = _py('subprocess.run(f"ping {host}", shell=True)\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_shell_true_string_concat_flags(self):
+        finds = _py('subprocess.run("apt-get update && apt-get install " + name, shell=True)\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+
 class TestJSTemplateLiteralConcat:
     def test_db_query_template_literal_flags(self):
         finds = _js("db.query(`SELECT * FROM users WHERE id = ${id}`);\n")
