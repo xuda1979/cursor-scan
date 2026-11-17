@@ -152,6 +152,33 @@ class TestPickleBackedVariants:
         analyze_python("x.py", "torch.load(path)\n", finds)
         assert finds[0].dimension == "deserialization"
 
+    # --- regex fallback for torch/numpy/REXML (added for non-.py coverage) ---
+    def test_regex_torch_load_default_flags(self):
+        assert _py("ckpt = torch.load(path)\n") == [("deser.pickle", "critical")]
+
+    def test_regex_torch_th_alias_flags(self):
+        assert _py("ckpt = th.load(path)\n") == [("deser.pickle", "critical")]
+
+    def test_regex_torch_weights_only_true_is_quiet(self):
+        assert _py("ckpt = torch.load(path, weights_only=True)\n") == []
+
+    def test_regex_load_state_dict_alone_is_quiet(self):
+        # load_state_dict loads tensors into an existing model; not archive
+        # unpickling (only a same-line torch.load would be the sink).
+        assert _py("model.load_state_dict(state)\n") == []
+
+    def test_regex_numpy_allow_pickle_true_flags(self):
+        assert _py("arr = np.load(path, allow_pickle=True)\n") == [("deser.pickle", "critical")]
+
+    def test_regex_numpy_without_allow_pickle_is_quiet(self):
+        assert _py("arr = np.load(path)\n") == []
+
+    def test_regex_rexml_new_flags(self):
+        assert _py("doc = REXML::Document.new(raw)\n") == [("deser.xxe", "critical")]
+
+    def test_regex_bare_document_new_is_quiet(self):
+        assert _py("doc = Document.new(raw)\n") == []
+
 
 class TestShelveAndUnpickler:
     """shelve.open opens a pickle-backed store (CWE-502) and pickle.Unpickler

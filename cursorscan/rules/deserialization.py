@@ -209,6 +209,35 @@ RE_JAVA_XSTREAM_FROMXML = re.compile(
 RE_JAVA_KRYO_READ = re.compile(
     r"\.readClassAndObject\s*\(",
 )
+# PyTorch torch.load (CWE-502): a saved checkpoint archives pickled Python
+# objects that are reconstructed on load, so an untrusted model file is
+# arbitrary code execution -- the PyTorch twin of keras.load_model /
+# joblib.load.  PyTorch >= 2.6 flips weights_only=True (tensor-only
+# reconstruction) by default, so a same-line explicit ``weights_only=True``
+# is the safe opt-out and stays quiet (yaml.Loader precedent); load_state_dict
+# (loading tensors into an existing model) and torch.save (writer direction)
+# are not archive unpickling and stay quiet.
+RE_TORCH_LOAD = re.compile(
+    r"\b(?:torch|th)\.load\s*\(",
+)
+RE_TORCH_WEIGHTS_ONLY = re.compile(
+    r"\b(?:torch|th)\.load\s*\([^)]*weights_only\s*=\s*True\b",
+)
+# numpy.load with an explicit allow_pickle=True (CWE-502): opt-in
+# reconstruction of pickled arrays from .npy/.npz files.  numpy >= 1.16.3
+# defaults to allow_pickle=False (safe), so only the explicit True opt-in
+# flags -- mirroring the yaml.unsafe_load / Loader=UnsafeLoader gate.
+RE_NUMPY_LOAD_PICKLE = re.compile(
+    r"\b(?:numpy|np)\.load\s*\([^)]*allow_pickle\s*=\s*True\b",
+)
+# Ruby stdlib REXML (CWE-611 XXE): REXML::Document.new parses a document with
+# DTD external-entity expansion enabled, the parsing path behind the classic
+# Rails XML-params XXE (CVE-2013-0156) -- local file reads and internal-host
+# probing.  The REXML qualification keeps the ubiquitous Ruby idiom
+# ``Document.new(xml)`` quiet (a generic receiver name carries no XML signal).
+RE_RUBY_XXE = re.compile(
+    r"\bREXML\s*::\s*Document\s*(?:\.|::)\s*new\s*\(",
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -336,6 +365,28 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Kryo)",
                                 "readClassAndObject/readObject 反序列化 Kryo 对象图，可实例化任意类",
                                 "使用内置序列化器白名单并校验注册类"))
+        # PyTorch torch.load reconstructs a pickled checkpoint archive (CWE-502):
+        # an untrusted model file is arbitrary code execution during load, the
+        # same shape as keras.load_model / joblib.load.  PyTorch >= 2.6 defaults
+        # weights_only=True, so an explicit same-line safe opt-out stays quiet.
+        if RE_TORCH_LOAD.search(raw) and not RE_TORCH_WEIGHTS_ONLY.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (PyTorch)",
+                                "torch.load 反序列化 pickle 存档，加载不可信模型可执行任意代码",
+                                "仅加载受信任的模型，并显式设置 weights_only=True"))
+        # numpy.load with explicit allow_pickle=True: opt-in reconstruction of
+        # pickled arrays (CWE-502).  numpy >= 1.16.3 defaults allow_pickle=False,
+        # so only the explicit opt-in flags (yaml.unsafe_load precedent).
+        if RE_NUMPY_LOAD_PICKLE.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (numpy)",
+                                "numpy.load(allow_pickle=True) 反序列化受信输入中的 pickle 对象，可执行任意代码",
+                                "对不可信文件保持 allow_pickle=False 或使用安全格式"))
+        # Ruby REXML: DTD external-entity expansion on parse (CWE-611 XXE), the
+        # path behind the Rails XML-params XXE (CVE-2013-0156).  The REXML
+        # qualification keeps bare ``Document.new`` quiet in Ruby sources.
+        if RE_RUBY_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "Ruby REXML 解析默认解析外部实体，可读取本地文件/内网探测",
+                                "禁用 DTD/外部实体解析 (entity expansion 限制) 或改用安全解析器"))
         if RE_NODE_UNSERIALIZE.search(raw):
             findings.append(hit(lineno, "deser.pickle", "unserialize 反序列化",
                                 "unserialize 反序列化负载并重建对象，可执行任意代码 (CVE-2017-5941)",
