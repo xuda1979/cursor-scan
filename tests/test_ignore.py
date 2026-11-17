@@ -96,22 +96,22 @@ def bad_copy(tmp_path):
 
 
 class TestIgnoreIntegration:
-    """scan_bad yields 210 findings; sql_concat x44, crypto.* x9, xss medium x3."""
+    """scan_bad yields 221 findings; sql_concat x48, crypto.* x9, xss medium x3."""
 
     def test_cli_ignore_reduces_findings(self, bad_copy, capsys):
         rc = main([bad_copy, "--no-save", "--ignore", "injection.sql_concat",
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1  # high/critical findings remain, --fail-on high gate holds
-        assert "发现 166 个问题" in out  # 210 - 44 suppressed
-        assert "已忽略 44 个发现" in out
+        assert "发现 173 个问题" in out  # 221 - 48 suppressed
+        assert "已忽略 48 个发现" in out
 
     def test_glob_ignore_suppresses_rule_family(self, bad_copy, capsys):
         rc = main([bad_copy, "--no-save", "--ignore", "crypto.*",
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "发现 201 个问题" in out  # 210 - 9 crypto
+        assert "发现 212 个问题" in out  # 221 - 9 crypto
         assert "已忽略 9 个发现" in out
 
     def test_rule_file_line_form(self, bad_copy, capsys):
@@ -134,7 +134,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         doc = json.loads(capsys.readouterr().out)
         assert rc == 1
-        assert len(doc["suppressed"]) == 44
+        assert len(doc["suppressed"]) == 48
         assert {f["rule_id"] for f in doc["suppressed"]} == {"injection.sql_concat"}
         # Kept findings no longer include the suppressed rules.
         assert not any(f["rule_id"] == "injection.sql_concat" for f in doc["findings"])
@@ -156,7 +156,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "已忽略 53 个发现" in out  # 9 crypto + 44 sql_concat
+        assert "已忽略 57 个发现" in out  # 9 crypto + 48 sql_concat
 
     def test_suppress_all_flips_gate_to_clean(self, bad_copy, capsys):
         with open(os.path.join(bad_copy, ".cursor-scan.json"), "w") as fh:
@@ -172,7 +172,7 @@ class TestIgnoreIntegration:
             json.dump({"ignore": ["crypto.*"]}, fh)
         main([bad_copy, "--no-save", "--format", "json", "--history-dir", "unused"])
         doc = json.loads(capsys.readouterr().out)
-        assert doc["score"] > 17  # suppressing 9 crypto.* findings raises the score
+        assert doc["score"] > 17  # suppressing 9 crypto.* findings raises the score (7 -> 20)
 
     def test_saved_snapshot_carries_suppressed(self, bad_copy, tmp_path, capsys):
         # Snapshots (history/dashboard input) must round-trip suppressed

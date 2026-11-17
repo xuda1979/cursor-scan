@@ -12,7 +12,10 @@ single-string `system`/`exec`, backticks, `qx{}`) and Lua (`..` concat /
 `mysql_real_query`, `sprintf`-built / `+`-concatenated commands into
 `system` / `popen`) and Swift (`+` concat / string-interpolation templates
 into SQLite.swift / FMDB receivers and `sqlite3_exec`, `Process` `/bin/sh -c`
-/ `system()` commands built with concat / interpolation)
+/ `system()` commands built with concat / interpolation) and Shell
+(`sqlite3` / `mysql` / `psql` / `mysqlsh` handed a double-quoted SQL literal
+interpolating a `$var`, plus `eval` and `sh`/`bash`/`zsh`/`dash -c` with a
+variable command argument)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -1439,3 +1442,144 @@ class TestPythonStrFormatRegex:
 
     def test_import_line_is_quiet(self):
         assert self._reg('from subprocess import run\n') == []
+
+
+class TestShellSqlConcat:
+    """Regex-layer lock for Shell SQL injection: the CLI database clients
+    ``sqlite3`` / ``mysql`` / ``psql`` / ``mysqlsh`` handed a double-quoted
+    SQL-keyword literal that interpolates a shell ``$var`` at runtime flags
+    ``injection.sql_concat``; static SQL literals, single-quoted arguments,
+    and non-tainted positional/special shell vars (``$#`` / ``$?`` / ``$$`` /
+    ``$0``) stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.sh", code)]
+
+    def test_sqlite3_double_quoted_var_flags(self):
+        assert self._reg(
+            'sqlite3 app.db "SELECT * FROM users WHERE id = $id"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysql_update_interpolation_flags(self):
+        assert self._reg(
+            'mysql -u root -e "UPDATE accounts SET balance = $amt WHERE user = $uid"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_psql_embedded_quote_flags(self):
+        # Double-quoted SQL containing embedded single quotes around $var.
+        assert self._reg(
+            "psql -d app -c \"DELETE FROM sessions WHERE token = '$tok'\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysqlsh_sql_cli_flags(self):
+        assert self._reg(
+            'mysqlsh --sql -e "SELECT * FROM orders WHERE region = $region"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_brace_interpolation_flags(self):
+        assert self._reg(
+            'sqlite3 app.db "SELECT * FROM users WHERE id = ${id}"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_literal_is_quiet(self):
+        assert self._reg(
+            'sqlite3 app.db "SELECT COUNT(*) FROM users"\n'
+        ) == []
+
+    def test_single_quoted_arg_is_quiet(self):
+        assert self._reg(
+            "mysql -e 'SELECT * FROM users WHERE id = 5'\n"
+        ) == []
+
+    def test_short_static_query_is_quiet(self):
+        assert self._reg('psql -c "SELECT 1"\n') == []
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            'sqlite3 app.db "SELECT * FROM users WHERE id = ?" "$uid"\n'
+        ) == []
+
+    def test_password_arg_before_query_is_quiet(self):
+        # The SQL keyword appears after the double-quoted password, not in it.
+        assert self._reg(
+            'mysql -p "$PW" -e "SELECT 1"\n'
+        ) == []
+
+    def test_positional_var_after_query_is_quiet(self):
+        # `$1` after the query is a shell positional arg, not tainted input.
+        assert self._reg(
+            'sqlite3 app.db "SELECT * FROM users WHERE id = $1"\n'
+        ) == []
+
+    def test_special_var_after_where_is_quiet(self):
+        # $# / $? / $$ are not tainted variables.
+        assert self._reg(
+            'sqlite3 app.db "SELECT * FROM users WHERE $# = 0"\n'
+        ) == []
+        assert self._reg(
+            'sqlite3 app.db "SELECT * FROM users WHERE id = $?"\n'
+        ) == []
+        assert self._reg(
+            'sqlite3 app.db "SELECT $$ FROM t"\n'
+        ) == []
+
+
+class TestShellShellConcat:
+    """Regex-layer lock for Shell command injection: ``eval`` and the
+    ``sh`` / ``bash`` / ``zsh`` / ``dash -c`` interpreters handed a bare or
+    double-quoted ``$var`` command argument flags ``injection.shell_concat``;
+    static commands, single-quoted arguments, and non-tainted positional /
+    special vars stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.sh", code)]
+
+    def test_eval_quoted_var_flags(self):
+        assert self._reg('eval "$cmd"\n') == [("injection.shell_concat", 1)]
+
+    def test_eval_bare_var_flags(self):
+        assert self._reg('eval $USER_INPUT\n') == [("injection.shell_concat", 1)]
+
+    def test_sh_c_quoted_var_flags(self):
+        assert self._reg('sh -c "$pipeline"\n') == [("injection.shell_concat", 1)]
+
+    def test_bash_c_interpolation_flags(self):
+        assert self._reg(
+            'bash -c "rm -rf $target"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_zsh_c_interpolation_flags(self):
+        assert self._reg(
+            'zsh -c "echo $msg > /tmp/out"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_dash_c_quoted_var_flags(self):
+        assert self._reg('dash -c "$script"\n') == [("injection.shell_concat", 1)]
+
+    def test_bash_c_bare_var_flags(self):
+        assert self._reg('bash -c $SCRIPT\n') == [("injection.shell_concat", 1)]
+
+    def test_eval_static_quoted_is_quiet(self):
+        assert self._reg('eval "true"\n') == []
+
+    def test_eval_single_quoted_is_quiet(self):
+        assert self._reg("eval 'echo hi'\n") == []
+
+    def test_eval_bare_words_is_quiet(self):
+        assert self._reg('eval echo hi\n') == []
+
+    def test_sh_c_static_quoted_is_quiet(self):
+        assert self._reg('sh -c "echo hello"\n') == []
+
+    def test_sh_c_single_quoted_is_quiet(self):
+        assert self._reg("bash -c 'ls -la'\n") == []
+
+    def test_sh_c_bare_words_is_quiet(self):
+        assert self._reg('bash -c echo hi\n') == []
+
+    def test_eval_positional_var_is_quiet(self):
+        assert self._reg('eval "$# more args"\n') == []
+
+    def test_eval_in_subshell_is_quiet(self):
+        # `$(eval ...)` is command substitution, not the eval builtin here.
+        assert self._reg('x=$(eval echo hi)\n') == []

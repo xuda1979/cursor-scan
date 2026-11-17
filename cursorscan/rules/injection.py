@@ -426,6 +426,26 @@ RE_SHELL_CONCAT_SWIFT = re.compile(
     + _SWIFT_DYN_ARG,
     re.I,
 )
+# Shell (.sh/.bash/.zsh): SQL passed to a CLI database client (sqlite3 / mysql /
+# psql / mysqlsh) as a double-quoted literal that interpolates a shell `$var`
+# at line-splice time (the SQL argument is a double-quoted string containing a
+# shell-variable reference, so runtime input reaches the parser unescaped).
+# Static literals and parameterized placeholder strings stay quiet.  Shell
+# forms: `eval "$cmd"` / `eval $cmd` and a shell interpreter launched with
+# `-c` (sh / bash / zsh / dash) taking a command argument that is a `$var`
+# reference; static command strings stay quiet, and `$#`/`$?`/`$$`/`$0` are
+# positional/runtime values, not tainted string variables.
+RE_SQL_CONCAT_SH = re.compile(
+    r"\b(?:sqlite3|mysql|psql|mysqlsh)\s+[^\"'\n]*\"[^\"]*"
+    + _SQL_KW
+    + r"[^\"]*\$[a-zA-Z_{@*]",
+    re.I,
+)
+RE_SHELL_CONCAT_SH = re.compile(
+    r"\beval\s+(?:\$[a-zA-Z_{@*]|\"[^\"]*\$[a-zA-Z_{@*])"
+    r"|\b(?:sh|bash|zsh|dash)\s+-c\s+(?:\$[a-zA-Z_{@*]|\"[^\"]*\$[a-zA-Z_{@*])",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -445,6 +465,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     js_ext = ext in ("js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts")
     cpp_ext = ext in ("c", "h", "cc", "cpp", "cxx", "hpp", "hxx")
     swift_ext = ext == "swift"
+    sh_ext = ext in ("sh", "bash", "zsh")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -544,6 +565,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if swift_ext and RE_SHELL_CONCAT_SWIFT.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Shell double-quoted `$var` interpolation into a CLI-database-tool SQL
+        # argument, plus eval / sh -c command injection.
+        if sh_ext and RE_SQL_CONCAT_SH.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if sh_ext and RE_SHELL_CONCAT_SH.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
