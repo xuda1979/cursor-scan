@@ -8,7 +8,10 @@ templates), Kotlin (`+` concat), Rust (`format!` / `format_args!` /
 and Perl (DBI double-quoted `$var` interpolation / `.` concat,
 single-string `system`/`exec`, backticks, `qx{}`) and Lua (`..` concat /
 `string.format` verbs into LuaSQL / LuaSQLite3 receivers, `os.execute` /
-`io.popen` command strings)
+`io.popen` command strings) and C/C++ (`.c/.h/.cpp/.hpp`: `+` concat /
+`sprintf`-verb literals into `sqlite3_exec` / `mysql_query` /
+`mysql_real_query`, `sprintf`-built / `+`-concatenated commands into
+`system` / `popen`)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -841,6 +844,95 @@ class TestLuaShellConcat:
 
     def test_static_io_popen_is_quiet(self):
         assert self._reg('local when = io.popen("date"):read("*a")\n') == []
+
+
+class TestCppSqlConcat:
+    """Regex-layer lock for C/C++ SQL receivers: sqlite3_exec / mysql_query /
+    mysql_real_query handed a SQL-keyword literal spliced with the `+`
+    operator (optionally via std::string or wrapped in `.c_str()`), or a
+    query string built through sprintf()/snprintf() with a printf verb baked
+    into the SQL literal, flags ``injection.sql_concat``; prepared statements
+    (sqlite3_prepare_v2 / mysql_stmt_*) and static literals stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cpp", code)]
+
+    def test_sqlite3_exec_c_str_concat_flags(self):
+        assert self._reg(
+            "sqlite3_exec(db, (\"SELECT * FROM users WHERE name = '\" + name + \"'\").c_str(), 0, 0, &err);\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_exec_string_concat_flags(self):
+        assert self._reg(
+            'sqlite3_exec(db, std::string("SELECT * FROM users WHERE id = ") + id, 0, 0, 0);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_snprintf_format_verb_flags(self):
+        assert self._reg(
+            'snprintf(query, sizeof query, "DELETE FROM logs WHERE id = %s", id);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sprintf_format_verb_flags(self):
+        assert self._reg(
+            'sprintf(query, "UPDATE accounts SET bal = %d WHERE id = %s", amt, id);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_prepare_v2_is_quiet(self):
+        assert self._reg(
+            'sqlite3_prepare_v2(db, "SELECT * FROM users WHERE id = ?", -1, &stmt, 0);\n'
+        ) == []
+
+    def test_mysql_stmt_prepare_is_quiet(self):
+        assert self._reg(
+            "mysql_stmt_prepare(stmt, \"UPDATE logs SET status = 'ok' WHERE id = ?\", -1);\n"
+        ) == []
+
+    def test_static_query_is_quiet(self):
+        assert self._reg(
+            'sqlite3_exec(db, "SELECT COUNT(*) FROM logs", 0, 0, 0);\n'
+        ) == []
+
+    def test_sprintf_without_sql_keyword_is_quiet(self):
+        assert self._reg(
+            'sprintf(buf, "%s: %d", tag, n);\n'
+        ) == []
+
+
+class TestCppShellConcat:
+    """Regex-layer lock for C/C++ shell execution: a command string built
+    with snprintf()/sprintf() and then handed to system()/popen() on the
+    same line, or a std::string `+` concat passed straight into system() /
+    popen(), flags ``injection.shell_concat``; static command strings stay
+    quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cpp", code)]
+
+    def test_snprintf_then_system_flags(self):
+        assert self._reg(
+            'snprintf(cmd, sizeof cmd, "ls -la %s", dir); system(cmd);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_string_concat_flags(self):
+        assert self._reg(
+            'system(("rm -rf /tmp/" + std::string(path)).c_str());\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_popen_concat_flags(self):
+        assert self._reg(
+            'popen(("grep " + pat).c_str(), "r");\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_system_is_quiet(self):
+        assert self._reg('system("true");\n') == []
+
+    def test_static_popen_is_quiet(self):
+        assert self._reg('popen("date", "r");\n') == []
+
+    def test_snprintf_without_receiver_is_quiet(self):
+        assert self._reg(
+            'snprintf(cmd, sizeof cmd, "ls -la %s", dir);\n'
+        ) == []
 
 
 class TestJSSqlConcatRegex:

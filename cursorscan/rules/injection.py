@@ -366,6 +366,32 @@ RE_SHELL_CONCAT_LUA = re.compile(
     r")",
     re.I,
 )
+# C/C++ (.c/.h/.cpp/.hpp/.cc/.cxx): C SQLite (sqlite3_exec) and MySQL
+# (mysql_query / mysql_real_query) receivers handed a query literal spliced
+# with the `+` operator (C++ std::string, possibly wrapped in `.c_str()`),
+# or a query string built through sprintf()/snprintf() with a printf verb
+# baked into a SQL-keyword literal.  Prepared statements (sqlite3_prepare_v2
+# / mysql_stmt_*) and static literals stay quiet.  Shell forms: a command
+# string built with sprintf()/snprintf() using a printf verb and then handed
+# to system()/popen() on the same line, or a std::string `+` concat passed
+# straight into system()/popen(); static command strings stay quiet.
+RE_SQL_CONCAT_CPP = re.compile(
+    r"\b(?:sqlite3_exec|mysql_query|mysql_real_query)\s*\(\s*[^,]+,\s*"
+    r"(?:std::string\s*\(|\(|)\s*(?:" + _SQL_STR + r")\s*"
+    r"(?:\)\s*)?(?:\.\s*c_str\s*\(\s*\)\s*)?\+"
+    r"|\b(?:snprintf|sprintf)\s*\(\s*[^,]+,?\s*(?:[^,]+,\s*)?(?:"
+    r"\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[a-zA-Z][^\"]*\""
+    r"|'[^']*(?:" + _SQL_KW + r")[^']*%[a-zA-Z][^']*'"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_CPP = re.compile(
+    r"(?:system|popen)\s*\(\s*\(\s*(?:std::string\s*\(\s*)?(?:\"[^\"]*\"|'[^']*')\s*\)?\s*\+"
+    r"|\b(?:snprintf|sprintf)\s*\(\s*[^,]+,?\s*(?:[^,]+,\s*)?"
+    r"(?:\"[^\"]*%[a-zA-Z][^\"]*\"|'[^']*%[a-zA-Z][^']*')[^)]*\)"
+    r"\s*;\s*(?:system|popen)\s*\(",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -383,6 +409,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     ext = source_path.rsplit(".", 1)[-1].lower() if "." in source_path else ""
     py_ext = ext in ("py", "pyi")
     js_ext = ext in ("js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts")
+    cpp_ext = ext in ("c", "h", "cc", "cpp", "cxx", "hpp", "hxx")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -464,6 +491,15 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if ext == "lua" and RE_SHELL_CONCAT_LUA.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # C/C++ sqlite3_exec / mysql_query / mysql_real_query receivers with
+        # `+` concatenation or a sprintf/snprintf format-string SQL literal,
+        # plus system()/popen() with a sprintf/snprintf-built command string.
+        if cpp_ext and RE_SQL_CONCAT_CPP.search(line):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用预编译语句 (sqlite3_prepare / mysql_stmt)"))
+        if cpp_ext and RE_SHELL_CONCAT_CPP.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
