@@ -25,6 +25,26 @@ RE_SHELVE_OPEN = re.compile(r"\bshelve\.open\s*\(")
 # it from a file handle (typically followed by .load()) unpickles the data
 # stream with the same arbitrary-code-execution surface.
 RE_UNPICKLER = re.compile(r"\b(?:_?pickle)\.Unpickler\s*\(")
+# Keras load_model reads a serialized model archive: the .keras zip format
+# embeds pickled objects and the legacy .h5 container reconstructs custom
+# objects from metadata, so an untrusted model is arbitrary code execution
+# during loading (CWE-502), the ML-ecosystem counterpart of joblib.load.
+# There is no safe-flag counterpart, so any load_model call flags (joblib
+# precedent). Covers plain and tf.keras qualifications of the classic
+# keras.models entry point and the Keras-3 keras.saving home.
+RE_KERAS_LOAD_MODEL = re.compile(
+    r"\b(?:tf\.)?keras\.(?:models|saving)\.load_model\s*\(",
+)
+# Keras load_model reads a serialized model archive: the .keras zip format
+# embeds pickled objects and the legacy .h5 container also reconstructs
+# custom objects through the config, and Keras' own docs warn that loading an
+# untrusted model can execute arbitrary code (CWE-502) -- the ML-ecosystem
+# twin of joblib.load.  There is no safe-flag counterpart, so any load_model
+# call flags.  Covers the classic keras.models entry point and the Keras 3
+# keras.saving home, plus both plain and tf.keras qualification.
+RE_KERAS_LOAD_MODEL = re.compile(
+    r"\b(?:tf\.)?keras\.(?:models|saving)\.load_model\s*\(",
+)
 # Python stdlib XML parsers resolve external entities by default (CWE-611
 # XXE): xml.etree / xml.dom / xml.sax / xml.parsers.expat all let a document's
 # DOCTYPE read local files and probe internal hosts during parsing. defusedxml
@@ -173,6 +193,13 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
                                 "pickle.Unpickler 反序列化可执行任意代码",
                                 "改用 JSON/安全格式"))
+        # Keras load_model reconstructs a serialized model archive (pickled
+        # objects in the .keras zip, custom-object config in .h5): an
+        # untrusted model is arbitrary code execution (CWE-502), like joblib.
+        if RE_KERAS_LOAD_MODEL.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Keras)",
+                                "load_model 读取序列化模型存档，加载不可信模型可执行任意代码",
+                                "仅加载受信任、经过校验的模型，或使用安全导出格式"))
         if RE_XML_PARSE.search(raw):
             findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
                                 "stdlib XML 解析默认解析外部实体，可读取本地文件/内网探测",

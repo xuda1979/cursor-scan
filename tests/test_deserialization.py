@@ -193,6 +193,44 @@ class TestShelveAndUnpickler:
         assert _py("from pickle import Unpickler\nup = Unpickler(fh)\n") == []
 
 
+class TestKerasLoadModel:
+    """Keras load_model reads a serialized model archive (.keras zip embeds
+    pickled objects; legacy .h5 reconstructs custom objects via config), which
+    Keras documents as arbitrary code execution on untrusted models (CWE-502).
+    Like joblib.load there is no safe-flag counterpart, so any call flags."""
+
+    def test_keras_models_load_model_flags(self):
+        assert _py("model = keras.models.load_model(path)\n") == [
+            ("deser.pickle", "critical")]
+
+    def test_tf_keras_models_load_model_flags(self):
+        assert _py("model = tf.keras.models.load_model(filepath)\n") == [
+            ("deser.pickle", "critical")]
+
+    def test_keras_saving_load_model_flags(self):
+        # Keras 3 relocated the entry point to keras.saving.
+        assert _py("model = keras.saving.load_model(uri)\n") == [
+            ("deser.pickle", "critical")]
+
+    def test_tf_keras_saving_load_model_flags(self):
+        assert _py("model = tf.keras.saving.load_model(uri)\n") == [
+            ("deser.pickle", "critical")]
+
+    def test_keras_import_line_is_quiet(self):
+        assert _py("import keras\n") == []
+
+    def test_tf_keras_import_line_is_quiet(self):
+        assert _py("import tensorflow as tf\n") == []
+
+    def test_save_model_is_quiet(self):
+        # Serializing out is not a deserialization sink.
+        assert _py("keras.models.save_model(model, path)\n") == []
+
+    def test_load_weights_is_quiet(self):
+        # load_weights reads raw weight arrays, not a deserialization sink.
+        assert _py("model.load_weights(path)\n") == []
+
+
 class TestXxeParsers:
     """Python stdlib XML parsers resolve external entities by default (CWE-611
     XXE): a DOCTYPE can read local files and probe internal hosts. defusedxml

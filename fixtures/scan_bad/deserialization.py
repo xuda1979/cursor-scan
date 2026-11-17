@@ -58,6 +58,16 @@ def load_checkpoint(path: str):
     return torch.load(path)
 
 
+def load_keras_checkpoint(path: str):
+    import keras
+    return keras.models.load_model(path)
+
+
+def load_tf_keras_model(path: str):
+    import tensorflow as tf
+    return tf.keras.models.load_model(path)
+
+
 def open_session_store(path: str):
     return shelve.open(path)
 
