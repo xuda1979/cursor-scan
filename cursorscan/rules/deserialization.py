@@ -94,6 +94,22 @@ RE_JAVA_XXE = re.compile(
     r"\b(?:DocumentBuilderFactory|SAXParserFactory|TransformerFactory"
     r"|XMLInputFactory|SchemaFactory)\s*\.(?:newInstance|newFactory)\s*\(",
 )
+# .NET's XML sink family (CWE-611 XXE): XmlDocument.Load/LoadXml, XDocument/
+# XElement.Parse/Load, XmlReader.Create and XmlTextReader all resolve DTD
+# external entities during parsing, which lets a crafted document read local
+# files and probe internal hosts (classic "billion laughs" / file-read XXE).
+# Typed receiver names are unambiguous XML loads and always match (the
+# XmlDocument.LoadXml / XDocument.Parse / XmlReader.Create call shapes); a
+# bare .Load form additionally requires a document-hinted receiver
+# (doc/document/xml...), keeping generic database/asset loaders
+# (``db.Load``) quiet -- mirroring the PHP DOMDocument gate. C# APIs are
+# conventionally capitalized, so the pattern is case-sensitive by design.
+RE_DOTNET_XXE = re.compile(
+    r"\b(?:XmlDocument\.(?:LoadXml|Load)"
+    r"|X(?:Document|Element)\.(?:Parse|Load)"
+    r"|XmlReader\.Create|XmlTextReader)\s*\("
+    r"|\b(?:doc|document|xml)\w*\s*\.\s*(?:LoadXml|Load)\s*\(",
+)
 RE_YAML_LOAD = re.compile(
     r"\b(yaml\.load|yaml\.load_all)\s*\(.*"
 )
@@ -257,6 +273,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
                                 "Java XML 解析器默认解析 DTD 外部实体，可读取本地文件/内网探测",
                                 "设置 FEATURE_SECURE_PROCESSING 并禁用 external DTD"))
+        # .NET XML sinks (C#): a document-hinted receiver rule keeps the typed
+        # and bare forms single-fire. The extension gate mirrors the Java-only
+        # gates above -- the receiver spellings (doc.Load / xml.Load) are not
+        # C#-exclusive text and must not fire in other languages.
+        if ext == "cs" and RE_DOTNET_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                ".NET XML 解析默认解析 DTD 外部实体，可读取本地文件/内网探测",
+                                "设置 XmlResolver = null / XmlReaderSettings 禁用 DTD 与外部实体"))
         if RE_EVAL.search(raw):
             findings.append(hit(lineno, "deser.eval", "eval 外部输入",
                                 "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))

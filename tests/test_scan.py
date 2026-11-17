@@ -26,6 +26,7 @@ BAD_EXPECTED = [
     ("unsafe_deser.java", {"deser.pickle", "deser.yaml_load"}),
     ("xml_xxe.php", {"deser.xxe"}),
     ("xml_xxe.java", {"deser.xxe"}),
+    ("xml_xxe.cs", {"deser.xxe"}),
     ("injection.py", {"injection.sql_concat", "injection.shell_concat"}),
     ("injection.php", {"injection.sql_concat", "injection.shell_concat"}),
     ("injection.java", {"injection.sql_concat", "injection.shell_concat"}),

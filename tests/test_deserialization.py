@@ -731,3 +731,62 @@ class TestJavaFrameworkDeser:
         assert analyze_code("x.py", "return xstream.fromXML(xml)\n") == []
         assert analyze_code("x.py", "return kryo.readClassAndObject(buf)\n") == []
 
+
+class TestDotNetXxe:
+    """C# .NET XML sinks (CWE-611 XXE): XmlDocument / XDocument / XElement /
+    XmlReader all resolve DTD external entities by default.  The extension gate
+    (.cs) keeps these receiver spellings from firing in other languages, and a
+    document-hinted receiver rule keeps generic loaders (db.Load) quiet."""
+
+    def _cs(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("X.cs", code)]
+
+    def test_xml_document_load_xml_flags(self):
+        assert self._cs("XmlDocument doc = new XmlDocument();\ndoc.LoadXml(userXml);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xml_document_load_flags(self):
+        assert self._cs("var doc = new XmlDocument();\ndoc.Load(req.Body);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xdocument_load_flags(self):
+        assert self._cs("var xdoc = XDocument.Load(bodyStream);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xelement_parse_flags(self):
+        assert self._cs("var node = XElement.Parse(userXml);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xml_reader_create_flags(self):
+        assert self._cs("var reader = XmlReader.Create(untrustedStream);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_xml_text_reader_ctor_flags(self):
+        assert self._cs("XmlTextReader reader = new XmlTextReader(input);\n") == \
+            [("deser.xxe", "critical")]
+
+    def test_document_hinted_bare_receiver_flags(self):
+        # The xml-prefixed receiver name is an XML loader; the bare .Load form
+        # matches under the document-hinted gate.
+        assert self._cs("xmlLoader.Load(userXml);\n") == [("deser.xxe", "critical")]
+        assert self._cs("document.Load(path);\n") == [("deser.xxe", "critical")]
+
+    def test_non_xml_loader_receiver_is_quiet(self):
+        # Generic database/asset loaders are not XML parsing.
+        assert self._cs("db.Load(id);\n") == []
+        assert self._cs("pdf.load(file);\n") == []
+        assert self._cs("config.LoadConfig(path);\n") == []
+
+    def test_cross_language_silence(self):
+        # The gate is the .cs extension: same text in other languages stays quiet.
+        assert analyze_code("x.py", "doc.LoadXml(userXml)\n") == []
+        assert analyze_code("x.js", "XDocument.Parse(body)\n") == []
+        assert analyze_code("x.php", "xmlReader.Create(input)\n") == []
+
+    def test_finding_carries_metadata(self):
+        finds = analyze_code("X.cs", "var doc = new XmlDocument();\ndoc.LoadXml(userXml);\n")
+        assert finds[0].dimension == "deserialization"
+        assert finds[0].rule_id == "deser.xxe"
+        assert finds[0].severity == "critical"
+        assert finds[0].message and finds[0].fix
+
