@@ -23,7 +23,7 @@ BAD_EXPECTED = [
                             "deser.xxe"}),
     ("exec_snippets.js", {"deser.eval", "deser.pickle"}),
     ("marshal_load.rb", {"deser.pickle", "deser.yaml_load"}),
-    ("unsafe_deser.java", {"deser.pickle"}),
+    ("unsafe_deser.java", {"deser.pickle", "deser.yaml_load"}),
     ("xml_xxe.php", {"deser.xxe"}),
     ("xml_xxe.java", {"deser.xxe"}),
     ("injection.py", {"injection.sql_concat", "injection.shell_concat"}),

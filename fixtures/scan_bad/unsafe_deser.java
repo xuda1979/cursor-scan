@@ -34,4 +34,32 @@ public class UnsafeDeser {
     mapper.disableDefaultTyping();
     return mapper;
   }
+
+  Object loadYamlDocs(String input) {
+    Yaml yaml = new Yaml();
+    return yaml.loadAll(input);
+  }
+
+  Object loadYamlAs(String input) {
+    Yaml yaml = new Yaml();
+    return yaml.loadAs(input, Stock.class);
+  }
+
+  Object loadYaml(String input) {
+    return yaml.load(input);
+  }
+
+  Object loadXStreamPayload(String xml) {
+    XStream xstream = new XStream();
+    return xstream.fromXML(xml);
+  }
+
+  Object loadKryoGraph(Input buffer) {
+    Kryo kryo = new Kryo();
+    return kryo.readClassAndObject(buffer);
+  }
+
+  Object safeYamlLoad(String input) {
+    return new Yaml(new SafeConstructor()).load(input);
+  }
 }

@@ -158,6 +158,41 @@ RE_JAVA_JACKSON_TYPING = re.compile(
 RE_NODE_UNSERIALIZE = re.compile(
     r"\b(?:serialize\.)?unserialize\s*\(\s*[^)\"']",
 )
+# SnakeYAML (Java) load-family sinks (CWE-502): yaml.load / loadAll / loadAs
+# instantiate arbitrary Java classes from YAML tags unless a safe-constructor
+# policy is applied -- the Java counterpart of Python yaml.load / Ruby
+# unsafe_load.  The lowercase `yaml` matches the natural Java variable name
+# (`Yaml yaml = new Yaml();`), and the capitalized `Yaml` covers a
+# static-call style; because both spellings overlap the Python/Ruby
+# lowercase-module rules, this pattern and the Python/Ruby yaml branches are
+# mutually gated on source extension in analyze_code (this one fires only in
+# .java files, the others only outside them).  The explicit safe-loader
+# opt-outs (constructor for SafeConstructor / SafeLoader / LoaderOptions)
+# switch arbitrary-object building OFF and stay quiet, mirroring
+# RE_YAML_SAFE_LOADER.  The dump() writer direction is quiet.
+RE_JAVA_YAML_LOAD = re.compile(
+    r"\b[yY]aml\s*\.\s*(?:load|loadAll|loadAs)\s*\(",
+)
+RE_JAVA_YAML_SAFE_LOADER = re.compile(
+    r"(?:SafeConstructor|SafeLoader|LoaderOptions)\s*\)",
+)
+# XStream fromXML (CWE-502): fromXML() builds live objects from an XML
+# document -- the Java XML-object-graph counterpart of readObject, historically
+# the classic remote-code-execution gadget family (CVE-2013-7285 and friends).
+# The toXML() / toXML(out, obj) writer directions stay quiet.
+RE_JAVA_XSTREAM_FROMXML = re.compile(
+    r"\.fromXML\s*\(",
+)
+# Kryo readClassAndObject (CWE-502): reads a serialized object graph built
+# from a runtime type registration -- a registered gadget class becomes an
+# arbitrary object.  Only readClassAndObject gets its own rule here; Kryo's
+# plain readObject spelling already fires under RE_JAVA_READOBJ's dynamic-arg
+# gate (Kryo's readObject(Output, Type) always carries a type argument, which
+# that gate treats as dynamic).  The writeClassAndObject / writeObject writer
+# directions stay quiet.
+RE_JAVA_KRYO_READ = re.compile(
+    r"\.readClassAndObject\s*\(",
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -204,10 +239,14 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
                                 "stdlib XML 解析默认解析外部实体，可读取本地文件/内网探测",
                                 "改用 defusedxml 或禁用 DTD/外部实体"))
-        if RE_YAML_UNSAFE.search(raw):
+        # Python (lowercase yaml) and Ruby (YAML/Psych) loader branches are
+        # owned outside .java files: in Java sources the same lowercase text
+        # is a SnakeYAML variable receiver handled by RE_JAVA_YAML_LOAD, so
+        # the extension gate keeps each convention single-fire.
+        if ext != "java" and RE_YAML_UNSAFE.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
-        elif RE_YAML_LOAD.search(raw) and not RE_YAML_SAFE_LOADER.search(raw):
+        elif ext != "java" and RE_YAML_LOAD.search(raw) and not RE_YAML_SAFE_LOADER.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
         if RE_PHP_XXE.search(raw):
@@ -255,6 +294,24 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Jackson)",
                                 "enableDefaultTyping/activateDefaultTyping 反序列化类型元数据可实例化任意类",
                                 "为 @class 属性配置 allowlist 或关闭默认类型绑定"))
+        # SnakeYAML load family: arbitrary class instantiation via YAML tags.
+        if ext == "java" and RE_JAVA_YAML_LOAD.search(raw) and not \
+                RE_JAVA_YAML_SAFE_LOADER.search(raw):
+            findings.append(hit(lineno, "deser.yaml_load", "不安全反序列化 (SnakeYAML)",
+                                "Yaml.load/loadAll/loadAs 可从 YAML 标签实例化任意 Java 类",
+                                "使用 SafeConstructor/SafeLoader 构造 Yaml"))
+        # XStream fromXML: live objects built from an XML document (the classic
+        # Java RCE gadget family).  Only meaningful in Java sources.
+        if ext == "java" and RE_JAVA_XSTREAM_FROMXML.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (XStream)",
+                                "fromXML 从 XML 构建反序列化对象图，可实例化任意 Java 类",
+                                "配置 XStream 白名单/黑名单 (setupSecurity) 或改用安全解析器"))
+        # Kryo readClassAndObject / readObject: runtime-registered gadget class
+        # becomes an arbitrary object.  Only meaningful in Java sources.
+        if ext == "java" and RE_JAVA_KRYO_READ.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Kryo)",
+                                "readClassAndObject/readObject 反序列化 Kryo 对象图，可实例化任意类",
+                                "使用内置序列化器白名单并校验注册类"))
         if RE_NODE_UNSERIALIZE.search(raw):
             findings.append(hit(lineno, "deser.pickle", "unserialize 反序列化",
                                 "unserialize 反序列化负载并重建对象，可执行任意代码 (CVE-2017-5941)",

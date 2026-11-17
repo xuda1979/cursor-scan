@@ -662,3 +662,72 @@ class TestJavaJacksonTyping:
         assert self._java("ObjectMapper om = new ObjectMapper();\n"
                           "om.deactivateDefaultTyping();\n") == []
 
+
+class TestJavaFrameworkDeser:
+    """Java framework deserialization sinks (CWE-502): SnakeYAML's load family
+    instantiates arbitrary classes from YAML tags (deser.yaml_load), XStream
+    fromXML builds live objects from XML (deser.pickle), and Kryo
+    readClassAndObject rebuilds a serialized object graph (deser.pickle). All
+    are .java-gated: the same lowercase text in Python/Ruby stays owned by
+    their own branches, and writer directions / explicit safe-loaders stay
+    quiet."""
+
+    def _java(self, code: str):
+        return [(f.rule_id, f.severity) for f in analyze_code("X.java", code)]
+
+    def test_snakeyaml_load_flags(self):
+        # Lowercase variable receiver is the natural Java idiom.
+        assert self._java("Yaml yaml = new Yaml();\nreturn yaml.load(input);\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_snakeyaml_load_all_flags(self):
+        assert self._java("Yaml yaml = new Yaml();\nreturn yaml.loadAll(input);\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_snakeyaml_load_as_flags(self):
+        assert self._java("Yaml yaml = new Yaml();\nreturn yaml.loadAs(input, Stock.class);\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_snakeyaml_capitalized_receiver_flags(self):
+        # Static-call style `Yaml.load` is also covered.
+        assert self._java("return Yaml.load(input);\n") == \
+            [("deser.yaml_load", "critical")]
+
+    def test_snakeyaml_safe_constructor_is_quiet(self):
+        # SafeConstructor switches arbitrary-object construction OFF; the
+        # suppression is line-local, so the safe call and the load must share
+        # one line.
+        assert self._java("return new Yaml(new SafeConstructor()).load(input);\n") == []
+
+    def test_snakeyaml_dump_is_quiet(self):
+        # dump() is the writer direction.
+        assert self._java("String out = yaml.dump(config);\n") == []
+
+    def test_xstream_from_xml_flags(self):
+        assert self._java("XStream xstream = new XStream();\nreturn xstream.fromXML(xml);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_xstream_to_xml_is_quiet(self):
+        assert self._java("XStream xstream = new XStream();\nreturn xstream.toXML(obj);\n") == []
+
+    def test_kryo_read_class_and_object_flags(self):
+        assert self._java("Kryo kryo = new Kryo();\nreturn kryo.readClassAndObject(buffer);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_kryo_read_object_single_fire(self):
+        # Kryo's plain readObject(Output, Type) is owned by RE_JAVA_READOBJ's
+        # dynamic-arg gate; it must fire exactly once, not twice.
+        assert self._java("return kryo.readObject(buf, Stock.class);\n") == \
+            [("deser.pickle", "critical")]
+
+    def test_kryo_writer_directions_are_quiet(self):
+        assert self._java("kryo.writeClassAndObject(buffer, obj);\nkryo.writeObject(out, obj);\n") == []
+
+    def test_java_rules_are_extension_gated(self):
+        # The same lowercase `yaml.load` in a .py file is Python (RE_YAML_LOAD);
+        # fromXML/readClassAndObject on a non-Java extension stay quiet.
+        py = analyze_code("x.py", "return yaml.load(text)\n")
+        assert [(f.rule_id, f.severity) for f in py] == [("deser.yaml_load", "critical")]
+        assert analyze_code("x.py", "return xstream.fromXML(xml)\n") == []
+        assert analyze_code("x.py", "return kryo.readClassAndObject(buf)\n") == []
+
