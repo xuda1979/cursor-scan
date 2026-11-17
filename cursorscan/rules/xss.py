@@ -161,6 +161,17 @@ RE_SETATTR_EVENT = re.compile(
     re.I,
 )
 
+# document.execCommand("insertHTML", false, html) parses the third argument
+# as raw HTML and inserts it into the DOM -- the execCommand counterpart of
+# insertAdjacentHTML (OWASP DOM-XSS). Only the insertHTML command carries an
+# HTML payload, so the case-insensitive command gate keeps cosmetic commands
+# (bold / copy / selectAll ...) quiet; the payload (last argument) is captured
+# so a hardcoded literal stays inert while any dynamic value flags.
+RE_EXECCOMMAND_INSERTHTML = re.compile(
+    r"""\bexecCommand\s*\(\s*["']inserthtml["']\s*(?:,\s*([^)]*)\s*)?\)""",
+    re.I,
+)
+
 # ``$.getScript(url)`` / ``jQuery.getScript(url)`` fetch a remote script and
 # evaluate it -- the jQuery HTML-script injection sink. The URL is captured so
 # a hardcoded CDN literal stays quiet (ordinary static include); a variable,
@@ -312,6 +323,19 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "xss.event_handler_attr", "事件属性注入",
                                 "setAttribute 设置字符串形式的内联事件处理器",
                                 "使用 addEventListener + 函数引用，或先转义回调内容"))
+        # document.execCommand("insertHTML", ...): the third argument is parsed
+        # as raw HTML into the DOM. The payload is the value after the last
+        # comma (the ``false`` showUI boolean and command name precede it); a
+        # hardcoded literal is inert static content, any dynamic value is
+        # attacker-influenceable. Non-insertHTML commands never match the
+        # command gate and stay quiet.
+        if m := RE_EXECCOMMAND_INSERTHTML.search(line):
+            payload = (m.group(1) or "").rsplit(",", 1)[-1].strip().rstrip(";")
+            if payload and not _static_literal_arg(payload):
+                findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
+                                    "execCommand('insertHTML', ...) 将参数解析为 HTML "
+                                    "写入 DOM，用户输入可触发 XSS",
+                                    "改用 textContent / insertAdjacentText，或先做 HTML 转义"))
         # Svelte {@html ...} raw-insertion block (works on .svelte files).
         if RE_SVELTE_HTML.search(line):
             rest = line.split("{@html", 1)[1].split("}", 1)[0].strip()

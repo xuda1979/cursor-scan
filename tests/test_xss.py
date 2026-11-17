@@ -99,6 +99,63 @@ class TestDomSink:
         assert f.message and f.fix
 
 
+class TestExecCommand:
+    """execCommand('insertHTML', ...) parses its payload as raw HTML into the
+    DOM (an OWASP DOM-XSS sink, sibling of insertAdjacentHTML). Only the
+    insertHTML command carries an HTML payload; a dynamic payload flags while
+    hardcoded literals and cosmetic commands stay quiet."""
+
+    def test_document_insert_html_flags(self):
+        found = _analyze("document.execCommand('insertHTML', false, html);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_case_variant_command_flags(self):
+        found = _analyze("document.execCommand('insertHtml', true, userHtml);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_any_receiver_flags(self):
+        # The sink is the command, not the receiver: text ranges and content
+        # editable elements insert HTML through the same execCommand path.
+        found = _analyze("range.execCommand('InsertHTML', false, payload);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_concatenation_payload_flags(self):
+        found = _analyze(
+            "document.execCommand('insertHTML', false, '<b>' + name + '</b>');\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_interpolated_template_payload_flags(self):
+        found = _analyze(
+            "document.execCommand('insertHTML', false, `<div>${x}</div>`);\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_call_result_payload_flags(self):
+        found = _analyze("document.execCommand('insertHTML', false, renderCard());\n")
+        assert [f.rule_id for f in found] == ["xss.dom_manipulation"]
+
+    def test_static_literal_payload_is_quiet(self):
+        # A hardcoded chunk is inert static content.
+        assert _analyze("document.execCommand('insertHTML', false, '<b>static</b>');\n") == []
+
+    def test_command_without_payload_is_quiet(self):
+        # The one-argument form has nothing to parse into the DOM.
+        assert _analyze("document.execCommand('insertHTML');\n") == []
+
+    def test_cosmetic_commands_are_quiet(self):
+        # Non-insertHTML commands do not carry an HTML payload.
+        assert _analyze("document.execCommand('bold');\n") == []
+        assert _analyze("document.execCommand('copy');\n") == []
+        assert _analyze("document.execCommand('selectAll', false, 'x');\n") == []
+
+    def test_finding_carries_metadata(self):
+        found = _analyze("document.execCommand('insertHTML', false, userHtml);\n")
+        assert len(found) == 1
+        f = found[0]
+        assert f.dimension == "xss"
+        assert f.severity == "medium"
+        assert f.message and f.fix
+
+
 class TestJQueryInsertFamily:
     """jQuery HTML-insertion methods beyond .html(): .append/.prepend/.after/
     .before/.replaceWith (shared names that are text-safe on plain DOM nodes,
