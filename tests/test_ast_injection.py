@@ -231,6 +231,67 @@ class TestPythonSqlAlchemyText:
         assert finds == []
 
 
+class TestPythonStrFormatConcat:
+    """str.format() / %-style interpolation are runtime-substitued SQL and
+    shell strings even though they are not f-strings: ``.format(uid)`` with a
+    placeholder and ``"..." % uid`` fed to the execute family or a subprocess
+    / os.system shell call must flag exactly as the +/f-string forms do.
+    Inert .format() (no args), parameterized %s arg tuples and static calls
+    with a lone %s conversion stay quiet."""
+
+    def test_execute_format_flags(self):
+        finds = _py('cursor.execute("SELECT * FROM t WHERE id = {}".format(uid))\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_execute_positional_format_flags(self):
+        finds = _py("cur.execute('INSERT INTO t VALUES ({0})'.format(v))\n")
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_execute_percent_format_flags(self):
+        finds = _py('db.execute("SELECT * FROM t WHERE key = %s" % key)\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_text_format_flags(self):
+        finds = _py('q = text("SELECT name FROM u WHERE id = {}".format(uid))\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_fetchval_format_flags(self):
+        finds = _py('v = await pool.fetchval("SELECT x FROM t WHERE k = {}".format(k))\n')
+        assert [f.rule_id for f in finds] == ["injection.sql_concat"]
+
+    def test_subprocess_format_flags(self):
+        finds = _py('subprocess.call("ping {}".format(host))\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_subprocess_percent_format_flags(self):
+        finds = _py('subprocess.Popen("ls %s" % d)\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_os_system_format_flags(self):
+        finds = _py('os.system("rm -rf {}".format(d))\n')
+        assert [f.rule_id for f in finds] == ["injection.shell_concat"]
+
+    def test_inert_format_no_args_is_quiet(self):
+        finds = _py('cur.execute("SELECT * FROM t".format())\n')
+        assert finds == []
+
+    def test_placeholder_without_format_call_is_quiet(self):
+        finds = _py('execute("SELECT {x} FROM t")\n')
+        assert finds == []
+
+    def test_parameterized_tuple_is_quiet(self):
+        finds = _py('cur.execute("SELECT * FROM t WHERE id = %s", (uid,))\n')
+        assert finds == []
+
+    def test_lone_conversion_without_operator_is_quiet(self):
+        finds = _py('execute("SELECT %s FROM t")\n')
+        assert finds == []
+
+    def test_shell_system_conversion_without_operator_is_quiet(self):
+        finds = _py('os.system("echo %s")\n')
+        assert finds == []
+
+
 class TestJSTemplateLiteralConcat:
     def test_db_query_template_literal_flags(self):
         finds = _js("db.query(`SELECT * FROM users WHERE id = ${id}`);\n")

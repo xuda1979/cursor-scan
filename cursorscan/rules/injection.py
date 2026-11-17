@@ -81,6 +81,53 @@ RE_SHELL_FSTRING_PY = re.compile(
     r"|f'[^']*\{[^}]+\})",
     re.I,
 )
+# Python ``str.format()`` and ``%``-style interpolating call forms that are not
+# f-strings: ``execute("SELECT ... {}".format(uid))`` and
+# ``execute("SELECT ... %s" % uid)`` feed a runtime-substituted SQL literal
+# straight into the driver (and os.system/subprocess variants into a shell).
+# A `{...}` placeholder plus a non-empty .format(...) argument list, or the
+# `` % `` operator right after a ``%s``-style conversion, marks the runtime
+# interpolation; an inert ``"".format()`` (no args), parameterized
+# ``"%s", (uid,)`` argument tuples and static calls stay quiet.
+_RE_PY_SQL_RCV = (
+    r"(?:execute|executemany|executescript|text|cursor\.execute|db\.execute|"
+    r"db\.query|query_all|query_one|run_query|cursor3\.execute|fetchval|fetchrow|"
+    r"fetch|fetchmany)"
+)
+RE_SQL_FMT_CALL_PY = re.compile(
+    r"\b" + _RE_PY_SQL_RCV + r"\s*\(\s*(?:"
+    r"\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}\"]*\}[^\"]*\"\s*\.format\s*\(\s*[^)]"
+    r"|'[^']*(?:" + _SQL_KW + r")[^']*\{[^}']*\}[^']*'\s*\.format\s*\(\s*[^)]"
+    r"|\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%\w[^\"]*\"\s+%\s+"
+    r"|'[^']*(?:" + _SQL_KW + r")[^']*%\w[^']*'\s+%\s+"
+    r")",
+    re.I,
+)
+# Assignment form: ``query = "SELECT ... {}".format(uid)`` / ``% uid`` where the
+# driver call (execute(query)) sits on a later line the line-scanner never sees,
+# mirroring RE_SQL_FSTRING_ASSIGN.
+RE_SQL_FMT_ASSIGN_PY = re.compile(
+    r"""^\s*[A-Za-z_]\w*\s*=\s*(?:
+        ["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^"']*\{[^}]*\}[^"']*["']\s*\.format
+        |["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^"']*%\w[^"']*["']\s+%\s+
+        )""",
+    re.I | re.VERBOSE,
+)
+# Shell-family call forms using str.format()/%-style interpolation:
+# os.system("rm -rf {}".format(d)) and subprocess.call("ls %s" % d) build the
+# command string at runtime then hand it to a shell, exactly like the f-string
+# form (RE_SHELL_FSTRING_PY).  The interpolation (`{...}` + non-empty .format
+# args, or `%s ... % var`) is required; static commands and parameterized
+# subprocess arg tuples stay quiet.
+RE_SHELL_FMT_CALL_PY = re.compile(
+    r"\b(?:subprocess\.(?:call|run|Popen|check_output|check_call)|os\.system|os\.popen|system|popen)\s*\(\s*(?:"
+    r"\"[^\"]*\{[^}\"]*\}[^\"]*\"\s*\.format\s*\(\s*[^)]"
+    r"|'[^']*\{[^}']*\}[^']*'\s*\.format\s*\(\s*[^)]"
+    r"|\"[^\"]*%\w[^\"]*\"\s+%\s+"
+    r"|'[^']*%\w[^']*'\s+%\s+"
+    r")",
+    re.I,
+)
 # PHP builds SQL strings with the `.` concatenation operator; the DB entry
 # points are mysqli_query($conn, ...) / pg_query($conn, ...) and the
 # PDO-style object receivers `$pdo->query/exec/prepare(...)` (variable-ish
@@ -249,7 +296,9 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             continue
         line = raw
         if py_ext and (RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line)
-                       or RE_SQL_FSTRING_CALL_PY.search(line)):
+                       or RE_SQL_FSTRING_CALL_PY.search(line)
+                       or RE_SQL_FMT_CALL_PY.search(line)
+                       or RE_SQL_FMT_ASSIGN_PY.search(line)):
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if js_ext and (RE_SQL_CONCAT_JS.search(line) or RE_SQL_CONCAT_JS_ASSIGN.search(line)):
@@ -258,7 +307,8 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if py_ext and RE_SHELL_CONCAT.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
-        if py_ext and RE_SHELL_FSTRING_PY.search(line) \
+        if py_ext and (RE_SHELL_FSTRING_PY.search(line)
+                       or RE_SHELL_FMT_CALL_PY.search(line)) \
                 and not (RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower()) \
                 and not RE_SHELL_OFF.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",

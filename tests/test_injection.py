@@ -789,3 +789,72 @@ class TestPythonFStringShellConcat:
 
     def test_import_line_is_quiet(self):
         assert self._reg('from subprocess import run\n') == []
+
+
+class TestPythonStrFormatRegex:
+    """Regex-layer parity for str.format()/%-style interpolating SQL and shell
+    call forms (AST already covers the same lines).  `.format(uid)` with a
+    placeholder, and ``"..." % var`` with a %s conversion fed to the execute
+    family or a subprocess/os.system shell call flag; inert ``.format()``
+    (no args), parameterized %s arg tuples and lone conversions without the
+    ``%`` operator stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py", code)]
+
+    def test_execute_format_flags(self):
+        assert self._reg('cursor.execute("SELECT * FROM t WHERE id = {}".format(uid))\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_execute_single_quoted_format_flags(self):
+        assert self._reg("cur.execute('INSERT INTO t VALUES ({0})'.format(v))\n"
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_execute_percent_format_flags(self):
+        assert self._reg('db.execute("SELECT * FROM t WHERE key = %s" % key)\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_embedded_opposite_quote_format_flags(self):
+        assert self._reg('cur.execute(f"DELETE FROM t WHERE owner = \'{owner}\'")\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_format_flags(self):
+        assert self._reg('q = "SELECT name FROM u WHERE id = {}".format(uid)\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_percent_format_flags(self):
+        assert self._reg('sql = "SELECT * FROM t WHERE n = %s" % name\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_os_system_format_flags(self):
+        assert self._reg('os.system("rm -rf {}".format(d))\n'
+                         ) == [("injection.shell_concat", 1)]
+
+    def test_subprocess_percent_format_flags(self):
+        assert self._reg('subprocess.call("ls %s" % d)\n'
+                         ) == [("injection.shell_concat", 1)]
+
+    def test_popen_format_flags(self):
+        assert self._reg('subprocess.Popen("ping {}".format(host))\n'
+                         ) == [("injection.shell_concat", 1)]
+
+    def test_inert_format_no_args_is_quiet(self):
+        assert self._reg('cur.execute("SELECT * FROM t".format())\n') == []
+
+    def test_placeholder_without_format_call_is_quiet(self):
+        assert self._reg('execute("SELECT {x} FROM t")\n') == []
+
+    def test_parameterized_tuple_is_quiet(self):
+        assert self._reg('cur.execute("SELECT * FROM t WHERE id = %s", (uid,))\n') == []
+
+    def test_lone_conversion_without_operator_is_quiet(self):
+        assert self._reg('execute("SELECT %s FROM t")\n') == []
+
+    def test_no_sql_keyword_format_is_quiet(self):
+        assert self._reg('execute("SET {k}".format(k))\n') == []
+
+    def test_no_sql_keyword_percent_is_quiet(self):
+        assert self._reg('execute("SET x = %s" % v)\n') == []
+
+    def test_import_line_is_quiet(self):
+        assert self._reg('from subprocess import run\n') == []

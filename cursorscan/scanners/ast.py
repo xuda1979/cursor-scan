@@ -487,6 +487,11 @@ def _has_concat(args: str) -> bool:
     # injection idiom in AI-generated code (e.g. ``execute(f"...{x}")``).
     if _has_fstring_interp(args):
         return True
+    # str.format() interpolation: ``"SELECT ... {} ...".format(uid)`` -- the
+    # format-spec braces plus a non-empty .format(...) argument list mark a
+    # dynamic interpolation, so an inert ``"".format()`` stays quiet.
+    if r".format(" in args and re.search(r"\.format\(\s*[^)\s]", args):
+        return True
     if "`" in args and "${" in args:
         return True
     return False
