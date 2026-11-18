@@ -669,6 +669,48 @@ RE_SHELL_CONCAT_DART = re.compile(
     + r")",
     re.I,
 )
+# Objective-C (.m / .mm): the signature taint is a format string built with
+# NSString stringWithFormat: / [[NSString alloc] initWithFormat:] /
+# stringByAppendingFormat: carrying a `%@` object placeholder, or FMDB's
+# variadic executeQuery:/executeUpdate: receiving a format LITERAL with `%@`
+# directly (the format ARGS list, e.g. executeQuery:withArgumentsInArray:,
+# is the parameterized bind and stays quiet) -- or
+# [@"..." stringByAppendingString:] concatenation -- feeding FMDB / sqlite3
+# receivers.  Shell forms: system() / popen() with a format-built command,
+# and NSTask @"-c" launch args built through a format call.  Static
+# literals, `?` placeholders, `%d` numeric formats and stringWithFormat:
+# without a SQL keyword stay quiet.
+_M_FMT_SQL = (
+    r"\[?(?:\[NSString\s+alloc\]\s*)?(?:NSString\s+)?"
+    + r"(?:stringWithFormat:|initWithFormat:|stringByAppendingFormat:)"
+    + r"\s*@?\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%@"
+)
+_M_APPEND_SQL = (
+    r"\[\s*@?\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\""
+    + r"\s+(?:stringByAppendingString|stringByAppendingFormat):"
+)
+RE_SQL_CONCAT_M = re.compile(
+    r"(?:executeQuery|executeUpdate)\s*:\s*@?\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%@"
+    + r"|(?:executeQuery|executeUpdate|executeStatement)\s*:\s*"
+    + r"(?:" + _M_FMT_SQL + r"|" + _M_APPEND_SQL + r")"
+    + r"|\bsqlite3_exec\s*\(\s*[^,]+,\s*\[?"
+    + r"(?:" + _M_FMT_SQL + r"|" + _M_APPEND_SQL + r")",
+    re.I,
+)
+# Line-anchored assignment form: `NSString *sql = [NSString stringWithFormat:
+# @"SELECT ... %@", x];` (driver call on a later line).
+RE_SQL_CONCAT_M_ASSIGN = re.compile(
+    r"^\s*(?:NSString\s*\*\s*|NSMutableString\s*\*\s*)?[A-Za-z_]\w*\s*=\s*\[?"
+    + r"(?:" + _M_FMT_SQL + r"|" + _M_APPEND_SQL + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_M = re.compile(
+    r"\b(?:system|popen)\s*\((?=[^)]*%@)[^)]*?"
+    + r"(?:stringWithFormat:|initWithFormat:|stringByAppendingFormat:)"
+    + r"|@\"-c\"\s*,\s*\[?\[?(?:NSString\s+)?"
+    + r"(?:stringWithFormat:|initWithFormat:)[^\]]*%@",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -696,6 +738,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     scala_ext = ext == "scala"
     groovy_ext = ext in ("groovy", "gradle")
     dart_ext = ext == "dart"
+    m_ext = ext in ("m", "mm")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -868,6 +911,16 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if dart_ext and RE_SHELL_CONCAT_DART.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Objective-C: FMDB / sqlite3_exec receivers fed a format-built
+        # (stringWithFormat: with a %@ place-holder) or stringByAppendingString:
+        #-concatenated query string (plus the assignment form), and
+        # system()/popen()/NSTask -c with a format-built command string.
+        if m_ext and (RE_SQL_CONCAT_M.search(line) or RE_SQL_CONCAT_M_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if m_ext and RE_SHELL_CONCAT_M.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

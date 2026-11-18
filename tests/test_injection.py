@@ -2298,3 +2298,113 @@ class TestDartShellConcat:
         assert self._reg(
             "Process.run(\"ls\")\n"
         ) == []
+
+
+class TestMObjCSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.m", code)]
+
+    def test_fmdb_execute_query_variadic_format_flags(self):
+        assert self._reg(
+            "[db executeQuery:@\"SELECT * FROM users WHERE id = %@\", uid]\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_fmdb_execute_update_variadic_format_flags(self):
+        assert self._reg(
+            "[db executeUpdate:@\"DELETE FROM logs WHERE id = %@\", lid]\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_query_string_with_format_flags(self):
+        assert self._reg(
+            "[db executeQuery:[NSString stringWithFormat:@\"SELECT name FROM accounts WHERE role = %@\", role]]\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_statement_init_with_format_flags(self):
+        assert self._reg(
+            "[db executeStatement:[[NSString alloc] initWithFormat:@\"INSERT INTO audit VALUES (%@)\", payload]]\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_exec_string_with_format_flags(self):
+        assert self._reg(
+            "sqlite3_exec(db, [[NSString stringWithFormat:@\"SELECT * FROM t WHERE name = %@\", name] UTF8String], nil, nil, nil)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_string_with_format_flags(self):
+        assert self._reg(
+            "NSString *sql = [NSString stringWithFormat:@\"UPDATE profiles SET bio = %@ WHERE id = %@\", bio, userId]\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_nsmutable_string_with_format_flags(self):
+        assert self._reg(
+            "NSMutableString *sql = [NSString stringWithFormat:@\"SELECT * FROM users WHERE id = %@\", uid];\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_by_appending_string_flags(self):
+        assert self._reg(
+            "[db executeQuery:[@\"SELECT * FROM books WHERE isbn = \" stringByAppendingString:isbn]]\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_exec_string_by_appending_format_flags(self):
+        assert self._reg(
+            "sqlite3_exec(db, [@\"SELECT * FROM books WHERE isbn = \" stringByAppendingFormat:isbn], nil, nil, nil)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_question_mark_placeholder_with_binds_is_quiet(self):
+        assert self._reg(
+            "[db executeQuery:@\"SELECT * FROM users WHERE id = ?\" withArgumentsInArray:@[uid]]\n"
+        ) == []
+
+    def test_named_parameters_are_quiet(self):
+        assert self._reg(
+            "[db executeQuery:@\"UPDATE t SET v = :val WHERE id = :id\" withParameterDictionary:params]\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "[db executeQuery:@\"SELECT COUNT(*) FROM orders\"]\n"
+        ) == []
+
+    def test_numeric_format_no_object_placeholder_is_quiet(self):
+        assert self._reg(
+            "NSString *msg = [NSString stringWithFormat:@\"%d users\", count]\n"
+        ) == []
+
+
+class TestMObjCShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.m", code)]
+
+    def test_system_format_built_command_flags(self):
+        assert self._reg(
+            "system([[NSString stringWithFormat:@\"ping -c 1 %@\", host] UTF8String])\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_init_with_format_flags(self):
+        assert self._reg(
+            "system([[NSString alloc] initWithFormat:@\"ping -c 1 %@\", host].UTF8String)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_popen_format_built_command_flags(self):
+        assert self._reg(
+            "popen([[NSString stringWithFormat:@\"ls -la %@\", dir] UTF8String], \"r\")\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_nstask_c_format_built_args_flags(self):
+        assert self._reg(
+            "[task setArguments:@[@\"-c\", [NSString stringWithFormat:@\"cmd %@\", arg]]]\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_string_by_appending_format_flags(self):
+        assert self._reg(
+            "system([[NSString stringWithFormat:@\"ls -la %@\", dir] stringByAppendingFormat:@\" extra %@\", extra])\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_system_command_is_quiet(self):
+        assert self._reg(
+            "system(\"ls -la\")\n"
+        ) == []
+
+    def test_nstask_static_args_are_quiet(self):
+        assert self._reg(
+            "[task setArguments:@[@\"/bin/ls\", @\"-l\"]]\n"
+        ) == []
