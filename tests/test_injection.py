@@ -3569,3 +3569,98 @@ class TestNimShellConcat:
             'execShellCmd(folder & " -al /tmp")\n'
         ) == []
 
+
+class TestBatchSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.bat", code)]
+
+    def test_osql_var_flags(self):
+        assert self._reg(
+            'osql -E -S . -d shop -Q "SELECT * FROM users WHERE id = %id%"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlcmd_var_flags(self):
+        assert self._reg(
+            'sqlcmd -S . -d shop -Q "INSERT INTO accounts (name) VALUES (\'%user%\')"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysql_e_var_flags(self):
+        assert self._reg(
+            'mysql -h db -u app -e "UPDATE accounts SET balance = %amount%"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_psql_var_flags(self):
+        assert self._reg(
+            'psql -h db -U app -c "DELETE FROM sessions WHERE sid = %sid%"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_var_flags(self):
+        assert self._reg(
+            'sqlite3 shop.db "ALTER TABLE users ADD COLUMN %col% text"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_set_assign_flags(self):
+        assert self._reg(
+            "set q=SELECT * FROM orders WHERE uid = %uid%\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_set_quoted_assign_flags(self):
+        assert self._reg(
+            'set "sql=SELECT * FROM users WHERE id = %k%"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'osql -E -Q "SELECT * FROM users WHERE id = 100"\n'
+            'sqlcmd -S . -Q "INSERT INTO accounts (name) VALUES (@name)"\n'
+            'set sql=SELECT * FROM users WHERE active = 1\n'
+        ) == []
+
+    def test_var_passthrough_is_quiet(self):
+        # `%sql%` alone has no SQL keyword, command-line tools expect the
+        # variable passthrough pattern from app-controlled batch logic.
+        assert self._reg(
+            'sqlcmd -Q "%sql%"\n'
+            "set name=Alicia\n"
+        ) == []
+
+
+class TestBatchShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.bat", code)]
+
+    def test_cmd_c_var_flags(self):
+        assert self._reg(
+            'cmd /c "del C:\\temp\\%file%"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_comspec_var_flags(self):
+        assert self._reg(
+            '%comspec% /c "net user %user% hack /add"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_start_var_flags(self):
+        assert self._reg(
+            'start "" "%scripts%\\deploy.cmd"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_call_var_flags(self):
+        assert self._reg(
+            'call "C:\\tools\\%tool%\\setup.bat"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_commands_are_quiet(self):
+        assert self._reg(
+            'cmd /c "echo backup in progress"\n'
+            "%comspec% /c copy C:\\data\\in.csv D:\\backup\\in.csv\n"
+            "start notepad.exe readme.txt\n"
+            "call build\\clean.cmd\n"
+            "echo Hello %name%\n"
+            "set target=%backup%\\daily\n"
+        ) == []
+
+    def test_echo_var_is_quiet(self):
+        # echo is not an executor, and %name% is only printed.
+        assert self._reg("echo Hello %name%\n") == []
+
+

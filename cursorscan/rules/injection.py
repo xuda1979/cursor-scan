@@ -1086,6 +1086,29 @@ RE_SHELL_CONCAT_CR = re.compile(
     + r")",
     re.I,
 )
+# Windows Batch (.bat/.cmd): the signature taint is a `%VAR%`-interpolated query
+# string fed to a CLI SQL client (osql/sqlcmd/mysql/psql/sqlite3), or built via
+# `set var=...` assignment with an interpolated target, plus an interpolated
+# command string run through cmd/comspec/start/call.  `%VAR%` is expanded at
+# runtime by the command interpreter, so a user-controlled variable landing in
+# the SQL text or the launched command is a real injection vector.
+RE_SQL_CONCAT_BAT = re.compile(
+    r"\b(?:osql|sqlcmd|mysql|psql|sqlite3)\b[^\"'\n]*\"[^\"\n]*"
+    + r"(?:" + _SQL_KW + r"[^\"%]*%[A-Za-z0-9_*]+\%"
+    + r"|%[A-Za-z0-9_*]+\%[^\"\n]*" + _SQL_KW + r")[^\"\n]*\"",
+    re.I,
+)
+RE_SQL_CONCAT_BAT_ASSIGN = re.compile(
+    r"^\s*set\s+[\"']?[A-Za-z_]\w*[\"']?=\s*[\"']?[^\"'\n]*"
+    + r"(?:" + _SQL_KW + r"[^\"'%]*%[A-Za-z0-9_*]+\%"
+    + r"|%[A-Za-z0-9_*]+\%[^\"'\n]*" + _SQL_KW + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_BAT = re.compile(
+    r"%comspec%[^%\r\n]*%[A-Za-z0-9_*]+\%"
+    + r"|\b(?:cmd|start|call)\b[^%\r\n]*%[A-Za-z0-9_*]+\%",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1127,6 +1150,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     ml_ext = ext in ("ml", "mli")
     nim_ext = ext == "nim"
     cr_ext = ext == "cr"
+    bat_ext = ext in ("bat", "cmd")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1387,6 +1411,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if cr_ext and RE_SHELL_CONCAT_CR.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if bat_ext and (RE_SQL_CONCAT_BAT.search(line) or RE_SQL_CONCAT_BAT_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if bat_ext and RE_SHELL_CONCAT_BAT.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
