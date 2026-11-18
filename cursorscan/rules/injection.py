@@ -515,6 +515,29 @@ RE_SHELL_CONCAT_PS1 = re.compile(
     r")",
     re.I,
 )
+# SQL (.sql): dynamic SQL built by concatenation inside the file itself.
+# PL/SQL / T-SQL / MySQL stored procedures assemble queries with
+# EXECUTE IMMEDIATE / EXEC( / sp_executesql, splicing a runtime value via
+# `||` (Oracle/Postgres concatenation), `+` (T-SQL), or CONCAT(...) /
+# CONCAT_WS(...) (MySQL, SQL Server 2012+).  Parameterized EXECUTE
+# IMMEDIATE ... USING or sp_executesql @sql, N'@p', @p = ... bind forms and
+# static literals stay quiet.
+RE_SQL_CONCAT_SQL = re.compile(
+    r"\b(?:EXECUTE\s+IMMEDIATE|EXEC|sp_executesql)\b[^\n;]*?(?:"
+    r"(?:N)?['\"](?:[^'\"]|''|\"\")*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)(?:[^'\"]|''|\"\")*['\"]\s*(?:\|\||\+)"
+    r"|@?[A-Za-z_]\w*(?:\s*\+\s*)+@?[A-Za-z_]\w*"
+    r"|CONCAT(?:_WS)?\s*\([^\n;]*?(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)"
+    r")",
+    re.I,
+)
+RE_SQL_CONCAT_SQL_ASSIGN = re.compile(
+    r"^\s*@?[A-Za-z_]\w*(?:\s+@?\w+)*\s*:?=\s*(?:"
+    r"(?:N)?['\"](?:[^'\"]|''|\"\")*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)(?:[^'\"]|''|\"\")*['\"]\s*(?:\|\||\+)"
+    r"|@?[A-Za-z_]\w*(?:\s*\+\s*)+@?[A-Za-z_]\w*"
+    r"|CONCAT(?:_WS)?\s*\([^\n;]*?(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)"
+    r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -537,6 +560,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     sh_ext = ext in ("sh", "bash", "zsh")
     r_ext = ext == "r"
     ps1_ext = ext == "ps1"
+    sql_ext = ext == "sql"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -664,6 +688,11 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if ps1_ext and RE_SHELL_CONCAT_PS1.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # SQL dynamic-SQL: EXECUTE IMMEDIATE / EXEC / sp_executesql / CONCAT
+        # splice forms and `var := '...SQL...' || x` assignment builds.
+        if sql_ext and (RE_SQL_CONCAT_SQL.search(line) or RE_SQL_CONCAT_SQL_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用绑定变量 (USING / sp_executesql 参数)"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
             findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
                                 "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))

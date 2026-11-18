@@ -23,7 +23,14 @@ interpolation, including `<-` assignment builds, plus `system()` fed a
 (`Invoke-Sqlcmd` / `Invoke-DbaQuery` / `Invoke-DbaCmd` double-quoted
 `-Query` strings interpolating `$var` / `$(...)` or `+`-concatenated,
 including `$query = ...` assignment builds, plus `Invoke-Expression` / `iex`
-fed an interpolated or concatenated command string)
+fed an interpolated or concatenated command string) and SQL
+(`EXECUTE IMMEDIATE` / `EXEC( ... )` / `sp_executesql` handed a query literal
+spliced with `||` (Oracle/Postgres) or `+` (T-SQL), a detached
+`@sql + @var` concatenation chain, or a `CONCAT(...)` / `CONCAT_WS(...)`
+(MySQL / SQL Server 2012+) build, including `SET @var = ...` assignment
+forms; parameterized `EXECUTE IMMEDIATE ... USING` binds, `sp_executesql
+@sql, @params, @p = ...` named binds, `?`-placeholder PREPARE and static
+literals stay quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -1810,3 +1817,83 @@ class TestPs1ShellConcat:
     def test_start_process_arglist_is_quiet(self):
         assert self._reg('Start-Process -FilePath "notepad.exe" -ArgumentList @("-p", $Path)\n') == []
         assert self._reg('& "C:\\Windows\\System32\\whoami.exe"\n') == []
+
+
+class TestSqlSqlConcat:
+    """Regex-layer lock for SQL (.sql) dynamic query building: EXECUTE
+    IMMEDIATE / EXEC( ... ) / sp_executesql handed a query literal spliced
+    with ``||`` (Oracle/Postgres) or ``+`` (T-SQL), a detached ``@sql + @var``
+    concatenation chain, or a ``CONCAT(...)`` / ``CONCAT_WS(...)`` (MySQL,
+    SQL Server 2012+) build, including ``SET @var = ...`` assignment forms,
+    flags ``injection.sql_concat``.  Parameterized ``EXECUTE IMMEDIATE ...
+    USING`` binds, ``sp_executesql @sql, @params, @p = ...`` named binds,
+    ``?``-placeholder PREPARE / EXECUTE and static literals stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.sql", code)]
+
+    def test_execute_immediate_pipe_concat_flags(self):
+        assert self._reg(
+            "EXECUTE IMMEDIATE 'SELECT * FROM users WHERE id = ' || p_id;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_immediate_multi_splice_flags(self):
+        assert self._reg(
+            "EXECUTE IMMEDIATE 'UPDATE accounts SET balance = ' || p_amt"
+            " || ' WHERE id = ' || p_id;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_exec_plus_concat_flags(self):
+        assert self._reg(
+            "EXEC ( 'DELETE FROM sessions WHERE token = ' + @token );\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_exec_detached_var_chain_flags(self):
+        assert self._reg(
+            "EXEC(@sql + @cust_id + ')')\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sp_executesql_plus_concat_flags(self):
+        assert self._reg(
+            "EXEC sp_executesql N'SELECT * FROM t WHERE a = ' + @v;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_concat_call_flags(self):
+        assert self._reg(
+            "SET @sql = CONCAT('SELECT * FROM log WHERE app = ', @app);\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_set_assign_plus_concat_flags(self):
+        assert self._reg(
+            "SET @logsql = N'INSERT INTO audit (msg) VALUES (N''' + @msg + N''')';\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_immediate_using_bind_is_quiet(self):
+        assert self._reg(
+            "EXECUTE IMMEDIATE 'SELECT * FROM users WHERE id = :id' USING p_id;\n"
+        ) == []
+
+    def test_sp_executesql_param_list_is_quiet(self):
+        assert self._reg(
+            "DECLARE @sql NVARCHAR(MAX) = N'SELECT * FROM orders WHERE cust = @cust';\n"
+            "DECLARE @params NVARCHAR(MAX) = N'@cust INT';\n"
+            "EXEC sp_executesql @sql, @params, @cust = @cust_id;\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "SELECT * FROM orders WHERE status = 'SHIPPED';\n"
+            "UPDATE accounts SET balance = 0 WHERE id = 1;\n"
+        ) == []
+
+    def test_prepare_placeholder_is_quiet(self):
+        assert self._reg(
+            "SET @s = 'SELECT * FROM items WHERE name = ?';\n"
+            "PREPARE stmt FROM @s;\n"
+            "EXECUTE stmt USING @name;\n"
+        ) == []
+
+    def test_concat_in_display_prose_is_quiet(self):
+        assert self._reg(
+            "SELECT 'Report for ' || TO_CHAR(CURRENT_DATE) AS header FROM dual;\n"
+        ) == []
