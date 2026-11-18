@@ -30,7 +30,12 @@ spliced with `||` (Oracle/Postgres) or `+` (T-SQL), a detached
 (MySQL / SQL Server 2012+) build, including `SET @var = ...` assignment
 forms; parameterized `EXECUTE IMMEDIATE ... USING` binds, `sp_executesql
 @sql, @params, @p = ...` named binds, `?`-placeholder PREPARE and static
-literals stay quiet)
+literals stay quiet) and VB.NET (`&`-concatenated or `$"..."`-interpolated
+SQL literals into `New SqlCommand(...)` / `.CommandText` ADO.NET receivers
+plus `Dim sql = ...` assignment builds, and `Process.Start` / `Shell(...)` /
+`CreateObject("WScript.Shell").Run` / `.Arguments=` with a `&`/`+`-
+concatenated command string; `@id` placeholders / `.AddWithValue(...)` and
+static command lines stay quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -1896,4 +1901,103 @@ class TestSqlSqlConcat:
     def test_concat_in_display_prose_is_quiet(self):
         assert self._reg(
             "SELECT 'Report for ' || TO_CHAR(CURRENT_DATE) AS header FROM dual;\n"
+        ) == []
+
+
+class TestVbSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vb", code)]
+
+    def test_sqlcommand_amp_concat_flags(self):
+        assert self._reg(
+            "Dim cmd As New SqlCommand(\"SELECT * FROM Users WHERE Id = \" & userId, conn)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlcommand_plus_concat_flags(self):
+        assert self._reg(
+            "Dim cmd As New SqlCommand(\"DELETE FROM logs WHERE id = \" + lid, conn)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_amp_concat_flags(self):
+        assert self._reg(
+            "cmd.CommandText = \"UPDATE accounts SET bal = \" & amt\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_interpolated_flags(self):
+        assert self._reg(
+            "cmd.CommandText = $\"SELECT id FROM accounts WHERE owner = '{owner}'\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dim_assignment_amp_concat_flags(self):
+        assert self._reg(
+            "Dim sql As String = \"SELECT * FROM items WHERE name = '\" & name & \"'\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            "Dim cmd As New SqlCommand(\"SELECT * FROM Users WHERE Id = @id\", conn)\n"
+            "cmd.Parameters.AddWithValue(\"@id\", id)\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "Dim sql As String = \"SELECT * FROM Users WHERE Name = @name\"\n"
+            "Dim cmd As New SqlCommand(sql, conn)\n"
+        ) == []
+
+    def test_declare_no_assignment_is_quiet(self):
+        assert self._reg(
+            "Dim cmd As New SqlCommand(\"SELECT COUNT(*) FROM Users\", conn)\n"
+        ) == []
+
+
+class TestVbShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vb", code)]
+
+    def test_process_start_amp_concat_flags(self):
+        assert self._reg(
+            "Process.Start(\"cmd.exe\", \"/c del /q \" & path)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_plus_concat_flags(self):
+        assert self._reg(
+            "Process.Start(\"cmd.exe\", \"/c \" + cmd)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_paren_form_flags(self):
+        assert self._reg(
+            "Shell(\"psexec \\\\host \" & target)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_noparen_form_flags(self):
+        assert self._reg(
+            "Shell \"psexec \\\\host \" & target\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_wscript_shell_run_flags(self):
+        assert self._reg(
+            "CreateObject(\"WScript.Shell\").Run(\"ping \" & host)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_wscript_shell_run_noparen_flags(self):
+        assert self._reg(
+            "CreateObject(\"WScript.Shell\").Run \"ping \" & host\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_arguments_assignment_flags(self):
+        assert self._reg(
+            "psi.Arguments = \"-c \" & arg\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            "Process.Start(\"notepad.exe\")\n"
+        ) == []
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            "Dim psi As New ProcessStartInfo(\"cp\")\n"
+            "psi.ArgumentList.Add(src)\n"
+            "process.Start(psi)\n"
         ) == []

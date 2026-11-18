@@ -538,6 +538,39 @@ RE_SQL_CONCAT_SQL_ASSIGN = re.compile(
     r")",
     re.I,
 )
+# VB.NET (.vb): the `&` operator (VB string concatenation; `+` also joins
+# strings) glues a runtime value onto a SQL-keyword literal fed into ADO.NET
+# receivers -- New SqlCommand("SELECT ... " & id, conn) or the
+# .CommandText assignment form -- before ExecuteNonQuery/ExecuteReader/ExecuteScalar.
+# An interpolated string ($"...{x}", VB 14+) assigned to CommandText also
+# expands templates at runtime.  Parameterized @id placeholders /
+# .AddWithValue(...) and static literals stay quiet.  Shell forms:
+# Process.Start / ProcessStartInfo, Shell(...) and CreateObject("WScript.Shell")
+# .Run called with a `&`/`+`-concatenated command string.
+RE_SQL_CONCAT_VB = re.compile(
+    r"New\s+\w*Command\s*\(\s*(?:" + _SQL_STR + r")\s*[&+]"
+    r"|\.CommandText\s*=\s*(?:" + _SQL_STR + r")\s*[&+]"
+    r"|\.CommandText\s*=\s*\$\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}]+\}",
+    re.I,
+)
+# Line-anchored assignment form: `Dim sql As String = "SELECT ... " & id`
+# (or `sql = ...`) where the tainted query is built before a CommandText/
+# `New SqlCommand(...)` consumer later in the routine.
+RE_SQL_CONCAT_VB_ASSIGN = re.compile(
+    r"^\s*Dim\s+[A-Za-z_]\w*(?:\s+As\s+\w+)?\s*=\s*(?:"
+    r"(?:" + _SQL_STR + r")\s*[&+]"
+    r"|\$\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}]+\}"
+    r")",
+    re.I,
+)
+_RE_ARG = r'(?:\"[^\"]*\"|' + "'[^']*')"
+RE_SHELL_CONCAT_VB = re.compile(
+    r"(?:System\.Diagnostics\.)?Process\.Start\s*\(\s*" + _RE_ARG + r"\s*,\s*" + _RE_ARG + r"\s*[&+]"
+    r"|\bShell\s*(?:\(\s*" + _RE_ARG + r"|" + _RE_ARG + r")\s*[&+]"
+    r"|CreateObject\s*\(\s*[\"']WScript\.Shell[\"']\s*\)\.Run\s*(?:\(\s*" + _RE_ARG + r"|" + _RE_ARG + r")\s*[&+]"
+    r"|\.Arguments\s*=\s*" + _RE_ARG + r"\s*[&+]",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -561,6 +594,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     r_ext = ext == "r"
     ps1_ext = ext == "ps1"
     sql_ext = ext == "sql"
+    vb_ext = ext == "vb"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -693,6 +727,15 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if sql_ext and (RE_SQL_CONCAT_SQL.search(line) or RE_SQL_CONCAT_SQL_ASSIGN.match(line)):
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用绑定变量 (USING / sp_executesql 参数)"))
+        # VB.NET: ADO.NET New SqlCommand / .CommandText with `&`/`+`-concatenated
+        # or $-interpolated template SQL (plus the `Dim sql = ...` assignment form),
+        # and Process.Start / Shell / WScript.Shell Run with a concatenated command.
+        if vb_ext and (RE_SQL_CONCAT_VB.search(line) or RE_SQL_CONCAT_VB_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (@参数)"))
+        if vb_ext and RE_SHELL_CONCAT_VB.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
             findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
                                 "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))
