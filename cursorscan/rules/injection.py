@@ -1027,6 +1027,32 @@ RE_SHELL_CONCAT_OCAML = re.compile(
     re.I,
 )
 
+# Nim (.nim): the signature taint is a `&`-concatenated query string fed to
+# the stdlib db_sqlite / db_mysql / db_postgres sinks (`db.exec "..." & v`,
+# `db.execAffectedRows`, `db.getAllRows`, `db.getRow`, `db.tryExec`, plus the
+# free-function forms `exec(db, ...)` / `getAllRows(db, ...)`), and a
+# `let sql = "..." & x` assignment build.  The shell sinks are the osproc
+# `execShellCmd "..." & v`, `execProcess`, and `execCmdEx` calls.  Static SQL
+# literals, `?`-placeholder statements, and static command strings stay quiet.
+RE_SQL_CONCAT_NIM = re.compile(
+    r"\b(?:db\.(?:exec|execAffectedRows|getAllRows|getRow|tryExec)|"
+    + r"(?:exec|execAffectedRows|getAllRows|getRow|tryExec)\(db)"
+    + r"\s*\(?[^\"'\n]*("
+    + _SQL_STR
+    + r")\s*&",
+    re.I,
+)
+RE_SQL_CONCAT_NIM_ASSIGN = re.compile(
+    r"^\s*(?:let|var)\s+[A-Za-z_]\w*\s*=\s*("
+    + _SQL_STR
+    + r")\s*&",
+    re.I,
+)
+RE_SHELL_CONCAT_NIM = re.compile(
+    r"\b(?:execShellCmd|execProcess|execCmdEx)\s*\(?[\"'][^\"']*[\"']\s*&",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1065,6 +1091,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     cfm_ext = ext in ("cfm", "cfc")
     tcl_ext = ext == "tcl"
     ml_ext = ext in ("ml", "mli")
+    nim_ext = ext == "nim"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1313,6 +1340,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if ml_ext and RE_SHELL_CONCAT_OCAML.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if nim_ext and (RE_SQL_CONCAT_NIM.search(line) or RE_SQL_CONCAT_NIM_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if nim_ext and RE_SHELL_CONCAT_NIM.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

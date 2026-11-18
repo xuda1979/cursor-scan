@@ -3405,3 +3405,84 @@ class TestOcamlShellConcat:
             'Sys.command (dynamic_cmd ^ " -l /var/log");;\n'
         ) == []
 
+
+class TestNimSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.nim", code)]
+
+    def test_exec_query_flags(self):
+        assert self._reg(
+            'db.exec(dbConn, "SELECT * FROM orders WHERE uid = " & id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_free_function_exec_flags(self):
+        assert self._reg(
+            'exec(dbConn, "INSERT INTO accounts (name) VALUES (\'" & user & "\')")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_exec_affected_rows_flags(self):
+        assert self._reg(
+            'discard db.execAffectedRows(dbConn, "UPDATE accounts SET balance = " & amount)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_get_all_rows_flags(self):
+        assert self._reg(
+            'let rows = db.getAllRows(dbConn, "DELETE FROM sessions WHERE sid = " & sid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_try_exec_flags(self):
+        assert self._reg(
+            'db.tryExec(dbConn, "ALTER TABLE users ADD COLUMN " & col)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_let_assign_flags(self):
+        assert self._reg(
+            'let sql = "SELECT * FROM users WHERE name = \'" & k & "\'"\n'
+            "db.getRow(dbConn, sql)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'db.getAllRows(dbConn, "SELECT * FROM users")\n'
+        ) == []
+
+    def test_placeholder_is_quiet(self):
+        assert self._reg(
+            'db.exec(dbConn, "SELECT * FROM orders WHERE uid = ?", id)\n'
+        ) == []
+
+    def test_bound_variable_is_quiet(self):
+        assert self._reg(
+            'let sql = "SELECT * FROM users" in\n'
+            "db.exec(dbConn, sql)\n"
+        ) == []
+
+
+class TestNimShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.nim", code)]
+
+    def test_exec_shell_cmd_flags(self):
+        assert self._reg(
+            'execShellCmd("grep " & q & " /var/log/messages")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_exec_cmd_ex_flags(self):
+        assert self._reg(
+            'let (outp, code) = execCmdEx("ls -la " & cmd)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_exec_process_flags(self):
+        assert self._reg(
+            'execProcess("cat " & p & " | wc -l")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_exec_shell_cmd_is_quiet(self):
+        assert self._reg('execShellCmd("grep -c error /var/log/messages")\n') == []
+
+    def test_command_built_from_variable_is_quiet(self):
+        # `&` following a variable (not a string literal) is not in-line taint.
+        assert self._reg(
+            'execShellCmd(folder & " -al /tmp")\n'
+        ) == []
+
