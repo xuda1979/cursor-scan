@@ -2408,3 +2408,144 @@ class TestMObjCShellConcat:
         assert self._reg(
             "[task setArguments:@[@\"/bin/ls\", @\"-l\"]]\n"
         ) == []
+
+
+class TestElixirSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ex", code)]
+
+    def test_repo_query_interpolated_flags(self):
+        assert self._reg(
+            "Repo.query(\"SELECT * FROM users WHERE id = #{uid}\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_repo_one_concat_flags(self):
+        assert self._reg(
+            "Repo.one(\"SELECT * FROM t WHERE id = \" <> uid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_postgrex_query_interpolated_flags(self):
+        assert self._reg(
+            "Postgrex.query(conn, \"SELECT * FROM users WHERE name = #{name}\", [])\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_myxql_bang_query_interpolated_flags(self):
+        assert self._reg(
+            "MyXQL.query!(conn, \"DELETE FROM logs WHERE id = #{lid}\", [])\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlitex_query_concat_flags(self):
+        assert self._reg(
+            "Sqlitex.query(db, 'SELECT * FROM books WHERE isbn = ' <> isbn)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_ecto_adapters_sql_query_interpolated_flags(self):
+        assert self._reg(
+            "Ecto.Adapters.SQL.query!(repo, \"UPDATE t SET v = #{val} WHERE id = #{id}\", [])\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mssql_query_interpolated_flags(self):
+        assert self._reg(
+            "MSSQL.query!(conn, \"SELECT TOP 1 * FROM t WHERE id = #{uid}\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_interpolated_flags(self):
+        assert self._reg(
+            "sql = \"SELECT * FROM users WHERE role = #{role}\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_concat_flags(self):
+        assert self._reg(
+            "query = \"DELETE FROM audit WHERE a = \" <> a\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pinned_assign_interpolated_flags(self):
+        assert self._reg(
+            "sql = 'INSERT INTO logs (p) VALUES (#{payload}')\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_positional_bind_is_quiet(self):
+        assert self._reg(
+            "Repo.query(\"SELECT * FROM users WHERE id = $1\", [uid])\n"
+        ) == []
+
+    def test_question_mark_placeholder_is_quiet(self):
+        assert self._reg(
+            "Postgrex.query(conn, \"SELECT * FROM t WHERE id = ?\", [uid])\n"
+        ) == []
+
+    def test_query_builder_pin_form_is_quiet(self):
+        assert self._reg(
+            "Repo.all(from u in User, where: u.id == ^uid)\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "Repo.one(\"SELECT COUNT(*) FROM orders\")\n"
+        ) == []
+
+    def test_interpolated_string_not_in_db_receiver_is_quiet(self):
+        assert self._reg(
+            "Logger.info(\"SELECT * FROM users WHERE id = #{uid}\")\n"
+        ) == []
+
+
+class TestElixirShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ex", code)]
+
+    def test_system_cmd_interpolated_flags(self):
+        assert self._reg(
+            "System.cmd(\"ping -c 1 #{host}\", [])\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_cmd_concat_flags(self):
+        assert self._reg(
+            "System.cmd(\"ls \" <> dir, [])\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_cmd_single_quoted_concat_flags(self):
+        assert self._reg(
+            "System.cmd('sh -c ' <> script, stderr_to_stdout: true)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_port_open_spawn_concat_flags(self):
+        assert self._reg(
+            "Port.open({:spawn, \"cat \" <> path}, [:binary])\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_port_open_spawn_interpolated_flags(self):
+        assert self._reg(
+            "Port.open({:spawn, \"cat #{path}\"}, [])\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_os_cmd_interpolated_flags(self):
+        assert self._reg(
+            ":os.cmd('mkdir /tmp/#{name}')\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_os_cmd_concat_flags(self):
+        assert self._reg(
+            ":os.cmd(\"rm -f \" <> path)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_system_cmd_is_quiet(self):
+        assert self._reg(
+            "System.cmd(\"ping\", [\"-c\", \"1\", host])\n"
+        ) == []
+
+    def test_static_system_cmd_is_quiet(self):
+        assert self._reg(
+            "System.cmd(\"ls\")\n"
+        ) == []
+
+    def test_static_os_cmd_is_quiet(self):
+        assert self._reg(
+            ":os.cmd('printf ok')\n"
+        ) == []
+
+    def test_non_elixir_shell_string_is_quiet(self):
+        assert self._reg(
+            "System.cmd(\"ls\", [dir])\n"
+        ) == []
+

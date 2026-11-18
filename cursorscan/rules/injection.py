@@ -711,6 +711,41 @@ RE_SHELL_CONCAT_M = re.compile(
     + r"(?:stringWithFormat:|initWithFormat:)[^\]]*%@",
     re.I,
 )
+# Elixir (.ex / .exs): the signature taint is a `#{}`-interpolated or
+# `<>`-concatenated query string fed to Ecto Repo.query/one/all/get (or bang
+# variants), Ecto.Adapters.SQL.query, or Postgrex / MyXQL / Sqlitex .query
+# (plus the `query = ...` / `sql = ...` assignment build consumed by a DB call
+# on a later line), and a concatenated / interpolated command string fed to
+# System.cmd / Port.open({:spawn, ...}) / :os.cmd.  `$1`-style positional
+# binds, `?` placeholders, the `from(...)` query-builder pin form and static
+# literals stay quiet.
+RE_SQL_CONCAT_EX = re.compile(
+    r"(?:Repo\.(?:query|one|all|get)!?\b|"
+    + r"Ecto\.Adapters\.SQL\.(?:query|query!)|"
+    + r"(?:Postgrex|MyXQL|MSSQL|Sqlx|Sqlitex)\.query!?)\s*\(\s*(?:[^,]+,\s*)?(?:"
+    + r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*#\{"
+    + r"|(?:" + _SQL_STR + r")\s*<>"
+    + r")",
+    re.I,
+)
+RE_SQL_CONCAT_EX_ASSIGN = re.compile(
+    r"^\s*[A-Za-z_]\w*\s*=\s*(?:"
+    + r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*#\{"
+    + r"|(?:" + _SQL_STR + r")\s*<>"
+    + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_EX = re.compile(
+    r"System\.cmd\s*\(\s*[^)]*?[\"'][^\"']*[\"']\s*<>"
+    + r"|System\.cmd\s*\(\s*[^)]*?[\"'][^\"']*#\{[^}]*\}[\"']"
+    + r"|Port\.open\s*\(\s*\{\s*:spawn\s*,\s*[\"'][^\"']*[\"']\s*<>"
+    + r"|Port\.open\s*\(\s*\{\s*:spawn\s*,\s*[\"'][^\"']*#\{[^}]*\}[\"']"
+    + r"|:os\.cmd\s*\(\s*(?:"
+    + r"[\"'][^\"']*[\"']\s*<>"
+    + r"|[\"'][^\"']*#\{[^}]*\}[\"']"
+    + r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -739,6 +774,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     groovy_ext = ext in ("groovy", "gradle")
     dart_ext = ext == "dart"
     m_ext = ext in ("m", "mm")
+    ex_ext = ext in ("ex", "exs")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -921,6 +957,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if m_ext and RE_SHELL_CONCAT_M.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if ex_ext and (RE_SQL_CONCAT_EX.search(line) or RE_SQL_CONCAT_EX_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
+        if ex_ext and RE_SHELL_CONCAT_EX.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
