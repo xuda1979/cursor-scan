@@ -781,6 +781,36 @@ RE_SHELL_CONCAT_ERL = re.compile(
     re.I,
 )
 
+# Julia (.jl): the signature taint is a `$`-interpolated (`$var` / `$(expr)`,
+# but not an escaped `\$1` bind) or `*`-concatenated query string fed to the
+# LibPQ / DBInterface / MySQL / SQLite receivers (plus the `Q = ...` assignment
+# build consumed by a DB call on a later line), and a `$`-interpolated
+# backtick-Command or `*`-concatenated / `$`-interpolated `Cmd(...)` string fed
+# to run / read / readchomp / success.  `?`-placeholder and `\$1`-style binds,
+# static backtick commands and static `Cmd(...)` strings stay quiet.
+RE_SQL_CONCAT_JL = re.compile(
+    r"\b(?:LibPQ\.(?:execute|query)|DBInterface\.(?:execute|prepare|query)|"
+    + r"MySQL\.(?:execute|query)|SQLite\.(?:query|execute))\s*\(\s*"
+    + r"(?:[^,]+,\s*)?(?:"
+    + r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*[^\\]\$[A-Za-z_(]"
+    + r"|(?:" + _SQL_STR + r")\s*\*"
+    + r")",
+    re.I,
+)
+RE_SQL_CONCAT_JL_ASSIGN = re.compile(
+    r"^\s*[A-Za-z_]\w*\s*=\s*(?:"
+    + r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*[^\\]\$[A-Za-z_(]"
+    + r"|(?:" + _SQL_STR + r")\s*\*"
+    + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_JL = re.compile(
+    r"\b(?:run|read|readchomp|readlines|success)\s*\(\s*`[^`]*\$[^`]*`"
+    + r"|\bCmd\s*\(\s*(?:[\"'][^\"']*\$[^\"']*[\"']"
+    + r"|[\"'][^\"']*[\"']\s*\*)",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -810,6 +840,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     m_ext = ext in ("m", "mm")
     ex_ext = ext in ("ex", "exs")
     erl_ext = ext in ("erl", "hrl")
+    jl_ext = ext == "jl"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1004,6 +1035,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if erl_ext and RE_SHELL_CONCAT_ERL.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if jl_ext and (RE_SQL_CONCAT_JL.search(line) or RE_SQL_CONCAT_JL_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if jl_ext and RE_SHELL_CONCAT_JL.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

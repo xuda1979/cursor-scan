@@ -2637,3 +2637,118 @@ class TestErlangShellConcat:
             'os:cmd("mkdir -p /tmp")\n'
         ) == []
 
+
+class TestJuliaSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.jl", code)]
+
+    def test_libpq_execute_interpolated_flags(self):
+        assert self._reg(
+            'LibPQ.execute(conn, "SELECT * FROM users WHERE id = $id")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dbi_execute_expression_interpolated_flags(self):
+        assert self._reg(
+            'DBInterface.execute(conn, "UPDATE accounts SET balance = balance - $(amt)")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysql_execute_concat_flags(self):
+        assert self._reg(
+            'MySQL.execute(conn, "SELECT * FROM orders WHERE user_id = " * uid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite_query_concat_flags(self):
+        assert self._reg(
+            'SQLite.query(db, "DELETE FROM sessions WHERE lid = " * lid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dbi_prepare_interpolated_flags(self):
+        assert self._reg(
+            'DBInterface.prepare(conn, "SELECT * FROM t WHERE name = $name")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite_execute_interpolated_flags(self):
+        assert self._reg(
+            'SQLite.execute(db, "INSERT INTO t VALUES ($v)")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_interpolated_flags(self):
+        assert self._reg(
+            'Q = "SELECT * FROM users WHERE id = $id"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_concat_flags(self):
+        assert self._reg(
+            'query = "SELECT * FROM t WHERE id = " * key\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_positional_bind_is_quiet(self):
+        assert self._reg(
+            'LibPQ.execute(conn, "SELECT * FROM users WHERE id = \\$1", [id])\n'
+        ) == []
+
+    def test_placeholder_is_quiet(self):
+        assert self._reg(
+            'DBInterface.execute(conn, "UPDATE accounts SET owner = ? WHERE id = ?", [name, 7])\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'MySQL.execute(conn, "SELECT COUNT(*) FROM orders")\n'
+        ) == []
+
+    def test_non_sql_interpolation_is_quiet(self):
+        assert self._reg(
+            'println("hello $name")\n'
+        ) == []
+
+    def test_plain_concat_without_sql_kw_is_quiet(self):
+        assert self._reg(
+            'msg = "abc" * x\n'
+        ) == []
+
+
+class TestJuliaShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.jl", code)]
+
+    def test_run_backtick_interpolated_flags(self):
+        assert self._reg(
+            "run(`ls $dir`)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_readchomp_backtick_expression_interpolated_flags(self):
+        assert self._reg(
+            "readchomp(`cat $(file)`)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_read_backtick_interpolated_flags(self):
+        assert self._reg(
+            "out = read(`cat $file`)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_run_cmd_concat_flags(self):
+        assert self._reg(
+            'run(Cmd("ping " * host))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_run_cmd_interpolated_flags(self):
+        assert self._reg(
+            'run(Cmd("cat $file"))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_backtick_is_quiet(self):
+        assert self._reg(
+            "run(`ls -la /tmp`)\n"
+        ) == []
+
+    def test_static_cmd_is_quiet(self):
+        assert self._reg(
+            'run(Cmd("mkdir -p /tmp/app"))\n'
+        ) == []
+
+    def test_non_tainted_read_is_quiet(self):
+        assert self._reg(
+            "out = read(`echo ok`)\n"
+        ) == []
+
