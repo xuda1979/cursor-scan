@@ -1,39 +1,65 @@
-﻿软件名称：cursor-scan 本地安全债扫描软件
+软件名称：cursor-scan 本地安全债扫描软件
 版本号：V1.0
-源程序总行数：1905 行（去除空行与注释）
+源程序总行数：3087 行（去除空行与注释）
 排版：A4 纵向，页眉「cursor-scan V1.0」左对齐，正文宋体五号，每页 50 行，页脚标注页码。
-
+著作权人：许达（中国移动研究院）
+共 20 个源文件（不含测试）。
 
 cursor-scan V1.0
 
 # ----- 文件: __init__.py (1 行) -----
+"""Cursor-Scan: local security-debt scanner for vibe-coded projects."""
+
 __version__ = "1.0.0"
 # ----- 文件: __main__.py (4 行) -----
+"""Entry point for ``python -m cursorscan``."""
+
 from __future__ import annotations
+
 from .cli import main
+
 if __name__ == "__main__":
     raise SystemExit(main())
-# ----- 文件: cli.py (239 行) -----
+# ----- 文件: cli.py (240 行) -----
+"""Command-line interface: scan a project, print the scorecard, emit
+text / JSON / SARIF output and enforce an exit-code gate.
+
+Exit codes:
+  0  scan completed and no findings at/above the gate threshold
+  1  scan completed with findings at/above the gate threshold
+  2  usage / environment error
+"""
+
 from __future__ import annotations
+
 import argparse
 import json
 import os
 import sys
 from typing import Dict, List, Optional
+
 from . import __version__
 from .history import (diff_snapshots, list_history, load_snapshot,
                       resolve_snapshot, result_to_dict, save_snapshot)
 from .ignore import compile_ignores
 from .models import Evidence, ScanResult, SEVERITY_ORDER
 from .scan import ScanOptions, scan_project
+
 SEVERITY_NAMES = ("low", "medium", "high", "critical")
+
+# Minimal SARIF 2.1.0 doc with one run per scan.
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 TOOL_NAME = "cursor-scan"
+
+
 def _arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="cursor-scan",
         description="Local security-debt scanner for vibe-coded projects.",
+第 1 页 共 60 页
+cursor-scan V1.0
+
     )
     p.add_argument("path", nargs="?", default=".", help="project directory to scan")
     p.add_argument(
@@ -47,6 +73,7 @@ def _arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--ignore", action="append", default=[], metavar="PATTERN",
         help="suppress matching findings; repeatable. A glob matches the rule id, "
+             "file basename or relative path; RULE[:FILE[:LINE]] matches by parts. "
              "Patterns can also be listed as \"ignore\" in .cursor-scan.json",
     )
     p.add_argument(
@@ -56,9 +83,6 @@ def _arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--history-dir", default=None,
         help="directory for scan snapshots (default: ./history)",
-第 1 页 共 60 页
-cursor-scan V1.0
-
     )
     p.add_argument(
         "--no-save", action="store_true",
@@ -80,13 +104,21 @@ cursor-scan V1.0
     p.add_argument("--port", type=int, default=8080, help="dashboard bind port")
     p.add_argument("--version", action="version", version=f"cursor-scan {__version__}")
     return p
+
+
 def _env_toggle(name: str) -> bool:
     val = os.environ.get(name, "")
     return val.strip().lower() in ("1", "true", "yes", "on")
+
+第 2 页 共 60 页
+cursor-scan V1.0
+
+
 def main(argv: List[str] | None = None) -> int:
     args = _arg_parser().parse_args(argv)
     options = ScanOptions(max_bytes=args.max_bytes,
                           ignore_patterns=compile_ignores(args.ignore))
+
     if args.history:
         return _cmd_history(args.history_dir)
     if args.serve:
@@ -100,6 +132,7 @@ def main(argv: List[str] | None = None) -> int:
             return 2
         print_diff(diff_snapshots(before, after))
         return 0
+
     try:
         result = scan_project(args.path, options)
     except NotADirectoryError as exc:
@@ -108,15 +141,14 @@ def main(argv: List[str] | None = None) -> int:
     except PermissionError as exc:
         print(f"cursor-scan: 无权限读取目标: {exc}", file=sys.stderr)
         return 2
-    saved = None
-第 2 页 共 60 页
-cursor-scan V1.0
 
+    saved = None
     if not args.no_save:
         try:
             saved = save_snapshot(result, args.history_dir)
         except OSError as exc:
             print(f"cursor-scan: 警告: 保存历史快照失败: {exc}", file=sys.stderr)
+
     if args.format == "json":
         print(json.dumps(result_to_dict(result), ensure_ascii=False, indent=2))
     elif args.format == "sarif":
@@ -125,11 +157,17 @@ cursor-scan V1.0
         print_text_report(result)
         if saved:
             print(f"\n历史: 快照已保存到 {saved}  (--history 查看, --diff 比较)")
+
     threshold = SEVERITY_ORDER[args.fail_on]
     gate_findings = [f for f in result.findings if SEVERITY_ORDER[f.severity] >= threshold]
     if gate_findings:
         return 1
     return 0
+第 3 页 共 60 页
+cursor-scan V1.0
+
+
+
 def _cmd_history(history_dir: Optional[str]) -> int:
     entries = list_history(history_dir)
     if not entries:
@@ -140,6 +178,8 @@ def _cmd_history(history_dir: Optional[str]) -> int:
         print(f"  {e.describe()}")
     print("\n比较: cursor-scan --diff <before> <after>")
     return 0
+
+
 def _cmd_serve(history_dir: Optional[str], host: str, port: int) -> int:
     from .history import default_history_dir
     from .webapp import run_dashboard
@@ -150,7 +190,10 @@ def _cmd_serve(history_dir: Optional[str], host: str, port: int) -> int:
         print(f"cursor-scan: 无法启动仪表板 ({host}:{port}): {exc}",
               file=sys.stderr)
         return 2
+
+
 def print_diff(diff) -> None:
+    """Render a two-snapshot ScanDiff as added/fixed/kept finding lines."""
     delta = diff.score_delta
     sign = "+" if delta > 0 else ""
     print(f"评分: {diff.before.get('score', '?')} -> {diff.after.get('score', '?')} "
@@ -162,14 +205,21 @@ def print_diff(diff) -> None:
         print(f"忽略 {len(diff.suppressed)} 项 (后一次扫描中被 --ignore 抑制)\n")
     for label, items in (("新增", diff.added), ("修复", diff.fixed),
                          ("忽略", diff.suppressed), ("取消忽略", diff.unsuppressed)):
-第 3 页 共 60 页
-cursor-scan V1.0
-
         for f in items:
             sev = f.get("severity", "?")
             print(f"  [{label}] [{sev.upper():<8}] {f.get('rule_id')}  "
                   f"{f.get('file')}:{f.get('line')}  {f.get('message')}")
+
+
+# --------------------------------------------------------------------------
+# Serialization
+# --------------------------------------------------------------------------
+
 def result_to_sarif(result: ScanResult) -> dict:
+第 4 页 共 60 页
+cursor-scan V1.0
+
+    """Convert a ScanResult into a SARIF 2.1.0 log object."""
     rules = _sarif_rules(result.findings)
     results = []
     for f in result.findings:
@@ -177,6 +227,9 @@ def result_to_sarif(result: ScanResult) -> dict:
         if f.line > 0:
             region["startLine"] = f.line
         if f.code_snippet:
+            # The snippet now travels into JSON / snapshots / SARIF alike, so
+            # XML consumers break the same way as before on a literal "]]>".
+            # Escape a literal CDATA-closer per SARIF 2.1.0 Appendix J.
             region["snippet"] = {
                 "text": f.code_snippet.replace("]]>", "]]]]><![CDATA[>")
             }
@@ -215,10 +268,12 @@ def result_to_sarif(result: ScanResult) -> dict:
                 },
             }],
         }],
-第 4 页 共 60 页
+    }
+第 5 页 共 60 页
 cursor-scan V1.0
 
-    }
+
+
 def _sarif_rules(findings: List[Evidence]) -> List[dict]:
     seen: Dict[str, dict] = {}
     for f in findings:
@@ -233,6 +288,12 @@ def _sarif_rules(findings: List[Evidence]) -> List[dict]:
             "properties": {"dimension": f.dimension},
         }
     return list(seen.values())
+
+
+# --------------------------------------------------------------------------
+# Text report
+# --------------------------------------------------------------------------
+
 def print_text_report(result: ScanResult) -> None:
     print("=" * 60)
     print(f"cursor-scan {__version__}  —  {result.target}")
@@ -257,32 +318,56 @@ def print_text_report(result: ScanResult) -> None:
         if f.fix:
             print(f"      修复: {f.fix}")
     _print_suppressed(result)
+
+
 def _print_suppressed(result: ScanResult) -> None:
+    """Append a note for findings that matched --ignore / config patterns."""
+第 6 页 共 60 页
+cursor-scan V1.0
+
     if not result.suppressed:
         return
     print(f"\n已忽略 {len(result.suppressed)} 个发现 (匹配忽略规则):")
     for f in result.suppressed:
         print(f"  [{f.severity.upper():<8}] {f.rule_id}  {f.file}:{f.line}")
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
-# ----- 文件: history.py (153 行) -----
-from __future__ import annotations
-import glob
-第 5 页 共 60 页
-cursor-scan V1.0
+# ----- 文件: history.py (152 行) -----
+"""Scan history persistence and two-scan diffing.
 
+Every CLI scan is stored as a JSON snapshot under a history directory
+(default: ``./history`` or ``--history-dir``). Snapshots are named
+``<target-slug>-<utc-timestamp>.json`` and are plain ScanResult dicts
+(see :func:`result_to_dict`) so offline dashboards can read them later.
+"""
+
+from __future__ import annotations
+
+import glob
 import json
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
+
 from . import __version__
 from .models import Evidence, ScanResult
+
 HISTORY_DIR_NAME = "history"
 _TIMESTAMP_FMT = "%Y%m%d-%H%M%S"
+
+
 def default_history_dir() -> str:
     return os.path.join(os.getcwd(), HISTORY_DIR_NAME)
+
+
+# --------------------------------------------------------------------------
+# Serialization: single source of truth for the on-disk snapshot shape.
+# --------------------------------------------------------------------------
+
 def evidence_to_dict(f: Evidence) -> dict:
     return {
         "rule_id": f.rule_id,
@@ -290,11 +375,16 @@ def evidence_to_dict(f: Evidence) -> dict:
         "severity": f.severity,
         "file": f.file,
         "line": f.line,
+第 7 页 共 60 页
+cursor-scan V1.0
+
         "message": f.message,
         "fix": f.fix,
         "dimension": f.dimension,
         "code_snippet": f.code_snippet,
     }
+
+
 def result_to_dict(result: ScanResult) -> dict:
     return {
         "tool": {"name": "cursor-scan", "version": __version__},
@@ -313,17 +403,22 @@ def result_to_dict(result: ScanResult) -> dict:
         "findings": [evidence_to_dict(f) for f in result.findings],
         "suppressed": [evidence_to_dict(f) for f in result.suppressed],
     }
+
+
+# --------------------------------------------------------------------------
+# Persistence
+# --------------------------------------------------------------------------
+
 def slug_for_target(target: str) -> str:
     base = os.path.basename(os.path.normpath(target)) or "root"
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-").lower()
     return slug or "project"
+
+
 def snapshot_path(target: str, history_dir: str,
                   now: Optional[datetime] = None) -> str:
     slug = slug_for_target(target)
     ts = (now or datetime.now(timezone.utc)).strftime(_TIMESTAMP_FMT)
-第 6 页 共 60 页
-cursor-scan V1.0
-
     base = os.path.join(history_dir, f"{slug}-{ts}")
     path = base + ".json"
     i = 2
@@ -331,13 +426,25 @@ cursor-scan V1.0
         path = f"{base}-{i}.json"
         i += 1
     return path
+
+
+第 8 页 共 60 页
+cursor-scan V1.0
+
 def save_snapshot(result: ScanResult, history_dir: Optional[str] = None) -> str:
+    """Persist a ScanResult as JSON and return the written path.
+
+    Creates the history directory if needed and never raises on a clean
+    run; callers that care about durability should check ``os.path.exists``.
+    """
     hd = history_dir or default_history_dir()
     os.makedirs(hd, exist_ok=True)
     path = snapshot_path(result.target, hd)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(result_to_dict(result), fh, ensure_ascii=False, indent=2)
     return path
+
+
 @dataclass
 class HistoryEntry:
     path: str
@@ -347,12 +454,16 @@ class HistoryEntry:
     grade: str
     findings: int
     scanned_files: int
+
     def describe(self) -> str:
         return (
             f"{os.path.basename(self.path)}  {self.target}  "
             f"{self.score}/100 {self.grade}  {self.findings} 发现"
         )
+
+
 def list_history(history_dir: Optional[str] = None) -> List[HistoryEntry]:
+    """Return snapshots newest-first; malformed files are skipped."""
     hd = history_dir or default_history_dir()
     if not os.path.isdir(hd):
         return []
@@ -370,15 +481,25 @@ def list_history(history_dir: Optional[str] = None) -> List[HistoryEntry]:
             score=doc.get("score", 0),
             grade=doc.get("grade", "?"),
             findings=len(doc.get("findings", [])),
-            scanned_files=doc.get("scanned_files", 0),
-        ))
-    entries.sort(key=lambda e: (os.path.getmtime(e.path), e.started_at, e.path),
-                 reverse=True)
-第 7 页 共 60 页
+第 9 页 共 60 页
 cursor-scan V1.0
 
+            scanned_files=doc.get("scanned_files", 0),
+        ))
+    # File mtime is the save time and is monotonic across writes, so the most
+    # recent snapshot reliably sorts first even within the same second.
+    entries.sort(key=lambda e: (os.path.getmtime(e.path), e.started_at, e.path),
+                 reverse=True)
     return entries
+
+
 def resolve_snapshot(ref: str, history_dir: Optional[str] = None) -> str:
+    """Turn a user reference into a snapshot path.
+
+    ``ref`` is used verbatim when it names an existing file, otherwise it is
+    treated as a target slug (or basename prefix) and resolved to the newest
+    matching snapshot. Raises FileNotFoundError when nothing matches.
+    """
     if os.path.isfile(ref):
         return ref
     hd = history_dir or default_history_dir()
@@ -390,9 +511,17 @@ def resolve_snapshot(ref: str, history_dir: Optional[str] = None) -> str:
     if not matches:
         raise FileNotFoundError(f"未找到快照: {ref} (历史目录: {hd})")
     return matches[0]  # list_history is newest-first
+
+
 def load_snapshot(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+# --------------------------------------------------------------------------
+# Diffing
+# --------------------------------------------------------------------------
+
 @dataclass
 class ScanDiff:
     before: dict
@@ -402,23 +531,42 @@ class ScanDiff:
     suppressed: List[dict]    # in before, ignored/suppressed in after
     unsuppressed: List[dict]  # suppressed in before, active again in after
     kept: List[dict]      # present in both
+
     @property
     def score_delta(self) -> int:
+第 10 页 共 60 页
+cursor-scan V1.0
+
         return int(self.after.get("score", 0)) - int(self.before.get("score", 0))
+
+
 def _finding_key(f: dict) -> Tuple[str, str, int]:
     return (f.get("rule_id", "?"), os.path.normpath(f.get("file", "?")),
             f.get("line", 0))
+
+
 def diff_snapshots(before: dict, after: dict) -> ScanDiff:
+    """Compare two scan snapshots by (rule_id, file, line).
+
+    Findings that existed in the before scan but only *disappear* because the
+    after scan suppressed them (--ignore / .cursor-scan.json) are reported in
+    ``suppressed`` rather than ``fixed``, so a diff never implies a fix that
+    was actually just an ignore.
+    """
     before_keyed = {_finding_key(f): f for f in before.get("findings", [])}
     after_keyed = {_finding_key(f): f for f in after.get("findings", [])}
     after_suppressed = {_finding_key(f): f
                         for f in after.get("suppressed", [])}
     before_suppressed = {_finding_key(f): f
                          for f in before.get("suppressed", [])}
+    # A finding gone from after.findings is "suppressed" when it now sits in
+    # after.suppressed (and is not itself a fix that re-appeared as active).
     suppressed = [f for k, f in sorted(before_keyed.items())
                   if k in after_suppressed and k not in after_keyed]
     fixed = [f for k, f in sorted(before_keyed.items())
              if k not in after_keyed and k not in after_suppressed]
+    # A finding the after scan un-suppresses comes back active: report it as
+    # "unsuppressed", not as a brand-new "added" instance.
     unsuppressed = [f for k, f in sorted(before_suppressed.items())
                     if k in after_keyed and k not in before_keyed]
     unsup_keys = {_finding_key(f) for f in unsuppressed}
@@ -427,1202 +575,100 @@ def diff_snapshots(before: dict, after: dict) -> ScanDiff:
     kept = [f for k, f in sorted(after_keyed.items()) if k in before_keyed]
     return ScanDiff(before=before, after=after, added=added, fixed=fixed,
                     suppressed=suppressed, kept=kept,
-第 8 页 共 60 页
-cursor-scan V1.0
-
                     unsuppressed=unsuppressed)
 # ----- 文件: ignore.py (39 行) -----
+"""Finding-suppression patterns for cursor-scan.
+
+Patterns come from ``--ignore`` (repeatable) or the ``"ignore"`` list in a
+``.cursor-scan.json`` file at the scan target. Two forms are supported:
+
+  * a single glob — matched against the rule ID, the file basename, or the
+    file's path relative to the scan target. Examples: ``secrets.*`` (all
+    secret rules), ``*.py`` (every finding in Python files),
+    ``tests/*.py`` (findings under an ``tests/`` subfolder);
+  * ``RULE[:FILE[:LINE]]`` — every present part must match, e.g.
+第 11 页 共 60 页
+cursor-scan V1.0
+
+    ``deps.known_vulnerable``, ``injection.sql_concat:injection.py`` or
+    ``injection.sql_concat:injection.py:11``.
+
+Matching is case-sensitive and anchored (``fnmatchcase``).
+"""
+
 from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import List, Optional
+
+
 @dataclass
 class IgnorePattern:
+    """One parsed suppression pattern (all fields are optional)."""
+
     rule: Optional[str] = None
     file: Optional[str] = None
     line: Optional[int] = None
+
     @staticmethod
     def parse(spec: str) -> "IgnorePattern":
         parts = spec.split(":")
         while len(parts) < 3:
             parts.append(None)
         rule, file_pat, line_str = parts[0], parts[1], parts[2]
+        # Empty fields from trailing/empty colon parts behave like omitted ones.
         rule = rule or None
         file_pat = file_pat or None
         line = int(line_str) if line_str and line_str.strip().isdigit() else None
         return IgnorePattern(rule=rule, file=file_pat, line=line)
+
     @staticmethod
     def _match(pat: Optional[str], *values: str) -> bool:
         return pat is None or any(fnmatchcase(v, pat) for v in values)
+
     def matches(self, rule_id: str, relpath: str, line: int) -> bool:
+        """Return True when a finding matches this pattern.
+
+        ``relpath`` is the finding's file path relative to the scan target.
+        """
         base = os.path.basename(relpath)
         if self.file is None and self.line is None:
+            # Single-field pattern: matches any of rule / basename / relpath.
             return self._match(self.rule, rule_id, base, relpath)
         if not self._match(self.rule, rule_id):
             return False
         if not self._match(self.file, base, relpath):
-            return False
-        if self.line is not None and line != self.line:
-            return False
-        return True
-def compile_ignores(specs: List[str]) -> List[IgnorePattern]:
-    return [IgnorePattern.parse(s) for s in specs]
-def is_suppressed(pattern: IgnorePattern, rule_id: str,
-                  relpath: str, line: int) -> bool:
-    return pattern.matches(rule_id, relpath, line)
-# ----- 文件: models.py (114 行) -----
-from __future__ import annotations
-import dataclasses
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-DIMENSIONS = [
-    "crypto",
-    "secrets",
-第 9 页 共 60 页
-cursor-scan V1.0
-
-    "deserialization",
-    "injection",
-    "permissions",
-    "access_control",
-    "dependencies",
-    "xss",
-]
-DIMENSION_LABELS = {
-    "crypto": "弱密码学",
-    "secrets": "硬编码秘密",
-    "deserialization": "不安全反序列化",
-    "injection": "注入",
-    "permissions": "文件权限",
-    "access_control": "访问控制",
-    "dependencies": "依赖风险",
-    "xss": "跨站脚本 (XSS)",
-}
-@dataclass
-class Evidence:
-    rule_id: str
-    title: str
-    severity: str
-    file: str
-    line: int
-    message: str
-    fix: str
-    dimension: str = "crypto"
-    code_snippet: str = ""
-@dataclass
-class ScanResult:
-    target: str
-    findings: List[Evidence] = field(default_factory=list)
-    scanned_files: int = 0
-    skipped_files: int = 0
-    started_at: str = ""
-    duration_sec: float = 0.0
-    score: int = 100
-    grade: str = "A"
-    dimensions: Dict[str, "DimensionScore"] = field(default_factory=dict)
-    summary: Dict[str, int] = field(default_factory=dict)
-    suppressed: List[Evidence] = field(default_factory=list)
-    def add(self, evidence: Evidence) -> None:
-        self.findings.append(evidence)
-    def scorecard(self) -> "Scorecard":
-        return Scorecard.from_result(self)
-@dataclass
-class DimensionScore:
-    dimension: str
-    score: int
-    findings: List[Evidence] = field(default_factory=list)
-第 10 页 共 60 页
-cursor-scan V1.0
-
-    @property
-    def count(self) -> int:
-        return len(self.findings)
-@dataclass
-class Scorecard:
-    overall: int
-    grade: str
-    dimensions: Dict[str, DimensionScore]
-    @staticmethod
-    def from_result(result: ScanResult) -> "Scorecard":
-        result.dimensions = Scorecard.compute(result.findings)
-        overall, grade = Scorecard.grade_overall(result.dimensions)
-        result.score = overall
-        result.grade = grade
-        return Scorecard(
-            overall=overall,
-            grade=grade,
-            dimensions=result.dimensions,
-        )
-    @staticmethod
-    def compute(findings: List[Evidence]) -> Dict[str, DimensionScore]:
-        dim_map: Dict[str, DimensionScore] = {
-            d: DimensionScore(dimension=d, score=100) for d in DIMENSIONS
-        }
-        weights = {
-            "low": 5,
-            "medium": 12,
-            "high": 20,
-            "critical": 30,
-        }
-        for f in findings:
-            ds = dim_map.get(f.dimension)
-            if ds is None:
-                ds = dim_map.setdefault(f.dimension, DimensionScore(dimension=f.dimension, score=100))
-            ds.findings.append(f)
-            ds.score = max(0, ds.score - weights.get(f.severity, 5))
-        return dim_map
-    @staticmethod
-    def grade_overall(dims: Dict[str, DimensionScore]) -> tuple[int, str]:
-        if dims:
-            overall = int(sum(d.score for d in dims.values()) / len(dims))
-        else:
-            overall = 100
-        if overall >= 90:
-            grade = "A"
-        elif overall >= 75:
-            grade = "B"
-        elif overall >= 60:
-            grade = "C"
-        elif overall >= 40:
-第 11 页 共 60 页
-cursor-scan V1.0
-
-            grade = "D"
-        else:
-            grade = "F"
-        return overall, grade
-def status_from_severity(sev: str) -> int:
-    return SEVERITY_ORDER.get(sev, 2)
-# ----- 文件: rules/access_control.py (73 行) -----
-from __future__ import annotations
-import re
-from typing import Dict, List, Tuple
-from ..models import Evidence
-AUTH_INDICATORS = {
-    "py": ["login_required", "auth_required", "require_auth", "permission_required",
-           "authorization", "auth.login", "jwt_required", "token_required", "login_required",
-           "oauth", "authenticate", "user.is_authenticated", "check_permission", "role_required"],
-    "js": ["auth", "authMiddleware", "requireAuth", "withAuth", "isAuthenticated",
-           "passport", "jwt", "csrf", "authorize", "checkAuth", "middleware"],
-}
-ROUTE_DECORATOR = re.compile(r"@(?:app\.|bp\.|router\.)?(route|get|post|put|delete|patch)")
-EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch|use)\s*\(")
-FASTAPI_ROUTE = re.compile(r"@(?:app|router)\.(get|post|put|delete|patch)")
-def _new_evidence(file: str, line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
-    return Evidence(rule_id=rule_id, title=title, severity="high", file=file, line=line,
-                    message=msg, fix=fix, dimension="access_control")
-def analyze_project(files: Dict[str, List[Tuple[int, str]]],
-                    findings_out: List[Evidence]) -> None:
-    has_any_auth = False
-    for path, lines in files.items():
-        for _, text in lines:
-            low = text.lower()
-            if any(an.lower() in low for an in AUTH_INDICATORS["py"]) or \
-               any(an.lower() in low for an in AUTH_INDICATORS["js"]):
-                has_any_auth = True
-                break
-        if has_any_auth:
-            break
-    if not has_any_auth:
-        return
-    _flag_python(files, findings_out)
-    _flag_js(files, findings_out)
-_AUTH_DECORATORS = ("login_required", "jwt_required", "auth_required",
-                   "require_auth", "token_required", "permission_required",
-                   "role_required", "admin_required")
-def _flag_python(files, out) -> None:
-    for path, lines in files.items():
-        if not path.endswith(".py"):
-            continue
-        for i, (lineno, text) in enumerate(lines):
-            s = text.strip()
-            if not ROUTE_DECORATOR.search(text):
 第 12 页 共 60 页
 cursor-scan V1.0
 
-                continue
-            lo = hi = i
-            while lo - 1 >= 0 and lines[lo - 1][1].strip().startswith("@"):
-                lo -= 1
-            while hi + 1 < len(lines) and lines[hi + 1][1].strip().startswith("@"):
-                hi += 1
-            block = "".join(lines[k][1] for k in range(lo, hi + 1))
-            auth_present = any(
-                re.search(rf"@{d}\b", block, re.I) for d in _AUTH_DECORATORS
-            )
-            if auth_present:
-                continue
-            out.append(_new_evidence(
-                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
-                f"路由处理器缺少登录/鉴权装饰器 (文件内的其他请求已使用鉴权)，"
-                f"所在装饰器块：{block.strip()}",
-                "添加 @login_required / @jwt_required 装饰器"))
-def _flag_js(files, out) -> None:
-    for path, lines in files.items():
-        if not (path.endswith(".js") or path.endswith(".ts") or path.endswith(".tsx")):
-            continue
-        for lineno, text in lines:
-            if not EXPRESS_ROUTE.search(text) and not FASTAPI_ROUTE.search(text):
-                continue
-            if any(an in text for an in ["authMiddleware", "requireAuth", "passport.authenticate",
-                                          "isAuthenticated", "jwt", "verifyToken", "authorize"]):
-                continue
-            out.append(_new_evidence(
-                path, lineno, "access_control.missing_auth", "路由缺少鉴权",
-                "Express/Fastify 路由未附加任何鉴权中间件", "在路由上加装 requireAuth 中间件"))
-# ----- 文件: rules/crypto.py (51 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_MD5_CALL = re.compile(r"\b(authlib\.jose\.|Cryptodome\.Hash\.|Crypto\.Hash\.|hashlib\.(?:new\s*\(\s*[\"'])?)md5\b", re.I)
-RE_SHA1_HASH = re.compile(r"\b(hashlib\.sha1|SHA1\b|Cryptodome\.Hash\.SHA1|Crypto\.Hash\.SHA1)")
-RE_DES = re.compile(r"\b(des|des3|tripledes)\b", re.I)
-RE_ECB = re.compile(r"\b(ecb|CipherMode\.ECB)\b", re.I)
-RE_HARDCODED_IV = re.compile(
-    r"\b(aes|cipher)(?:\.\w+|\s+\()\s*[^)\n]{0,40}(iv|nonce)\s*=\s*([\"'][^\"']+[\"']|b?[\"'][0-9a-fA-F]{8,}[\"']|[0-9]{5,})", re.I
-)
-RE_HARDCODED_SEED = re.compile(
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, message: str, fix: str, sev: str = "high") -> Evidence:
-        return Evidence(
-            rule_id=rule_id,
-第 13 页 共 60 页
-cursor-scan V1.0
-
-            title=title,
-            severity=sev,
-            file=source_path,
-            line=line,
-            message=message,
-            fix=fix,
-            dimension="crypto",
-            code_snippet="",
-        )
-    for lineno, raw in code_lines(code):
-        line = raw
-        if line.lstrip().startswith(("import ", "from ")):
-            continue
-        if RE_HARDCODED_SEED.search(line):
-            findings.append(hit(lineno, "crypto.hardcoded_seed", "硬编码随机种子",
-                                "随机数种子固定使输出可预测", "移除固定 seed 或从环境变量读取"))
-        if RE_HARDCODED_IV.search(line):
-            findings.append(hit(lineno, "crypto.fixed_iv", "固定 IV/nonce",
-                                "加密使用固定初始化向量导致相同明文产生相同密文", "每次加密使用随机 IV"))
-        if RE_MD5_CALL.search(line):
-            findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (MD5)",
-                                "MD5 已被破解，不应用于安全场景", "改用 SHA-256 / SHA-3 (hashlib.sha256)"))
-        if RE_SHA1_HASH.search(line):
-            findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (SHA1)",
-                                "SHA-1 碰撞攻击成本已被学界证实", "改用 SHA-256 / SHA-3"))
-        if RE_DES.search(line):
-            findings.append(hit(lineno, "crypto.weak_cipher_des", "弱加密算法 (DES)",
-                                "DES 密钥长度过短，易被暴力破解", "改用 AES (GCM 模式)"))
-        if RE_ECB.search(line):
-            findings.append(hit(lineno, "crypto.ecb_mode", "不安全加密模式 (ECB)",
-                                "ECB 模式相同明文块产生相同密文块，泄露结构信息", "改用 GCM / CBC + 随机 IV"))
-    return findings
-# ----- 文件: rules/deps.py (131 行) -----
-from __future__ import annotations
-import json
-import os
-import re
-from typing import Dict, List, Optional, Tuple
-from ..models import Evidence
-DIMENSION = "dependencies"
-KNOWN_VULNS: Dict[str, List[Tuple[str, str, str, str]]] = {
-    "flask": [("0.12.2", "CVE-2018-1000656", "medium", "超大 JSON 数组导致 DoS (debug 模式)")],
-    "jinja2": [("2.10.1", "CVE-2019-8341", "critical", "沙箱逃逸，可读取服务器文件 (SSTI)")],
-    "django": [("1.11.27", "CVE-2019-19844", "high", "旧版 Django (1.11 已停止维护) 存在账户枚举漏洞")],
-    "pillow": [("8.3.1", "CVE-2021-34552", "high", "convert 缓冲区溢出，可致 RCE")],
-    "requests": [("2.19.1", "CVE-2018-18074", "medium", "重定向时不剥离 Authorization 头，凭据泄露")],
-    "pyyaml": [("5.2", "CVE-2020-1747", "high", "yaml.load 加载不可信数据可致 RCE")],
-    "cryptography": [("3.3.2", "CVE-2020-25659", "high", "RSA 解密 oracle 侧信道")],
-    "urllib3": [("1.25.9", "CVE-2020-26137", "medium", "CRLF 注入 / HTTP 请求走私")],
-    "pyjwt": [("1.6.4", "CVE-2018-1000531", "high", "算法混淆攻击，可伪造令牌")],
-第 14 页 共 60 页
-cursor-scan V1.0
-
-    "log4j": [("2.16.0", "CVE-2021-44228", "critical", "Log4Shell JNDI 注入 RCE")],
-    "lodash": [("4.17.20", "CVE-2021-23337", "high", "defaultsDeep 原型污染")],
-    "minimist": [("1.2.5", "CVE-2021-44906", "medium", "原型污染链可致 RCE")],
-    "axios": [("0.21.1", "CVE-2021-3749", "high", "SSRF + 服务器端请求认证绕过")],
-    "moment": [("2.29.3", "CVE-2022-31129", "medium", "duration 解析 ReDoS")],
-    "yargs-parser": [("18.1.1", "CVE-2020-7608", "medium", "原型污染")],
-}
-def _ver_tuple(version: str) -> Optional[Tuple[int, ...]]:
-    m = re.match(r"^\s*v?(\d+(?:\.\d+)*)", str(version))
-    if not m:
-        return None
-    return tuple(int(p) for p in m.group(1).split("."))
-def _cmp(a: str, b: str) -> Optional[int]:
-    ta, tb = _ver_tuple(a), _ver_tuple(b)
-    if ta is None or tb is None:
-        return None
-    n = max(len(ta), len(tb))
-    ta += (0,) * (n - len(ta))
-    tb += (0,) * (n - len(tb))
-    return (ta > tb) - (ta < tb)
-def _known_vuln(name: str, version: str) -> Optional[Tuple[str, str, str]]:
-    for max_vul, cve, sev, note in KNOWN_VULNS.get(name.lower(), ()):
-        c = _cmp(version, max_vul)
-        if c is not None and c <= 0:
-            return cve, sev, note
-    return None
-def _evidence(path: str, line: int, rule_id: str, title: str,
-              msg: str, fix: str, sev: str) -> Evidence:
-    return Evidence(rule_id=rule_id, title=title, severity=sev, file=path,
-                    line=line, message=msg, fix=fix, dimension=DIMENSION)
-def _vuln_evidence(path: str, line: int, name: str, spec: str,
-                   cve: str, sev: str, note: str) -> Evidence:
-    return _evidence(
-        path, line, "deps.known_vulnerable", "依赖存在已知漏洞",
-        f"{name}{spec} 命中 {cve}: {note}",
-        f"升级 {name} 到修复版本（参考 {cve} 公告）", sev)
-def _unpinned_evidence(path: str, line: int, name: str, spec: str) -> Evidence:
-    return _evidence(
-        path, line, "deps.unpinned_package", "未固定版本的依赖",
-        f"{name} 使用未固定版本（{spec}），构建不可复现且可能引入含漏洞版本",
-        "锁定精确版本（requirements: ==；npm: 配合 lockfile）", "low")
-_REQ_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(==|>=|<=|~=|!=|>|<|===)?\s*([^\s;]+)?")
-_REQ_SKIP = re.compile(r"^\s*[#\-]")
-def _parse_pin(spec: str) -> Tuple[Optional[str], bool]:
-    m = _REQ_RE.match(spec)
-    if not m:
-        return None, False
-    _, op, version = m.groups()
-    return version, op in ("==", "===")
-def _check_requirements(path: str, code: str, findings: List[Evidence]) -> None:
-第 15 页 共 60 页
-cursor-scan V1.0
-
-    for lineno, raw in enumerate(code.splitlines(), start=1):
-        if not raw.strip() or _REQ_SKIP.match(raw):
-            continue
-        m = _REQ_RE.match(raw)
-        if not m:
-            continue
-        name, op, version = m.groups()
-        if not version or op not in ("==", "==="):
-            findings.append(_unpinned_evidence(path, lineno, name, raw.strip()))
-            continue
-        vuln = _known_vuln(name, version)
-        if vuln:
-            findings.append(_vuln_evidence(path, lineno, name, f"=={version}", *vuln))
-_FLOATING = ("*", "latest", "next", "x")
-def _is_floating(spec: str) -> bool:
-    s = spec.strip()
-    return s in _FLOATING or s.endswith(".x") or s.startswith((">", "<"))
-def _exact_npm_version(spec: str) -> Optional[str]:
-    s = spec.strip()
-    if s.startswith(("^", "~", ">", "<")) or s in _FLOATING or s.endswith(".x"):
-        return None
-    m = re.match(r"=?v?(\d+(?:\.\d+)*)", s)
-    if not m:
-        return None
-    return m.group(1)
-def _find_dep_line(source_lines: List[str], name: str) -> int:
-    pat = re.compile('"' + re.escape(name) + r'"\s*:')
-    for i, line in enumerate(source_lines, start=1):
-        if pat.search(line):
-            return i
-    return 1
-def _check_package_json(path: str, code: str, findings: List[Evidence]) -> None:
-    try:
-        doc = json.loads(code)
-    except ValueError:
-        return  # malformed manifest: not part of this rule's scope
-    if not isinstance(doc, dict):
-        return
-    source_lines = code.splitlines()
-    for section in ("dependencies", "devDependencies"):
-        deps = doc.get(section)
-        if not isinstance(deps, dict):
-            continue
-        for name, spec in deps.items():
-            if not isinstance(spec, str):
-                continue
-            lineno = _find_dep_line(source_lines, name)
-            version = _exact_npm_version(spec)
-            if version is None:
-                if _is_floating(spec):
-第 16 页 共 60 页
-cursor-scan V1.0
-
-                    findings.append(_unpinned_evidence(path, lineno, name, spec))
-                continue
-            vuln = _known_vuln(name, version)
-            if vuln:
-                findings.append(_vuln_evidence(path, lineno, name, f"@{spec}", *vuln))
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    base = os.path.basename(source_path).lower()
-    if base == "package.json":
-        _check_package_json(source_path, code, findings)
-    elif (base == "requirements.txt" or base == "requirement.txt"
-          or (base.startswith("requirements") and base.endswith(".txt"))):
-        _check_requirements(source_path, code, findings)
-    return findings
-# ----- 文件: rules/deserialization.py (42 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_PICKLE = re.compile(
-)
-RE_YAML_UNSAFE = re.compile(
-)
-RE_YAML_LOAD = re.compile(
-)
-RE_EVAL = re.compile(r"\beval\s*\(\s*[^)\"']")
-RE_EXEC = re.compile(r"\bexec\s*\(\s*[^)\"']")
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
-                        line=line, message=msg, fix=fix, dimension="deserialization")
-    for lineno, raw in code_lines(code):
-        if "import " in raw or "from " in raw:
-            if "pickle" not in raw and "marshal" not in raw and "yaml" not in raw:
-                continue
-            else:
-                if "marshal" in raw:
-                    continue
-        if RE_PICKLE.search(raw):
-            if "load" in raw or "loads" in raw:
-                findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
-                                    "pickle 反序列化可执行任意代码", "改用 JSON/安全格式"))
-        if RE_YAML_UNSAFE.search(raw):
-            findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
-                                "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
-        elif RE_YAML_LOAD.search(raw) and "SafeLoader" not in raw and "UnsafeLoader" not in raw:
-            findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
-                                "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
-第 17 页 共 60 页
-cursor-scan V1.0
-
-        if RE_EVAL.search(raw):
-            findings.append(hit(lineno, "deser.eval", "eval 外部输入",
-                                "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))
-        if RE_EXEC.search(raw):
-            findings.append(hit(lineno, "deser.exec", "exec 外部输入",
-                                "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
-    return findings
-# ----- 文件: rules/helpers.py (71 行) -----
-from __future__ import annotations
-import re
-from typing import Iterator, Optional, Tuple
-def _scan_line(
-    raw: str,
-    in_triple: bool,
-    triple_ch: str,
-    in_block: bool,
-) -> Tuple[str, bool, str, bool]:
-    chars: list[str] = []
-    n = len(raw)
-    i = 0
-    while i < n:
-        if in_block:
-            end = raw.find("*/", i)
-            if end == -1:
-                return "".join(chars), in_triple, triple_ch, True
-            i = end + 2
-            in_block = False
-            continue
-        if in_triple:
-            end = raw.find(triple_ch * 3, i)
-            if end == -1:
-                return "".join(chars), True, triple_ch, False
-            i = end + 3
-            in_triple = False
-            continue
-        ch = raw[i]
-        if raw.startswith("/*", i):
-            in_block = True
-            i += 2
-            continue
-        if ch in "\"'" and raw.startswith(ch * 3, i):
-            in_triple = True
-            triple_ch = ch
-            i += 3
-            continue
-        if ch in "\"'`":
-            chars.append(ch)
-            i += 1
-            while i < n:
-                if raw[i] == "\\" and i + 1 < n:
-第 18 页 共 60 页
-cursor-scan V1.0
-
-                    chars.extend((raw[i], raw[i + 1]))
-                    i += 2
-                    continue
-                if raw[i] == ch:
-                    chars.append(ch)
-                    i += 1
-                    break
-                chars.append(raw[i])
-                i += 1
-            continue
-        if ch == "#" or raw.startswith("//", i):
-            break
-        chars.append(ch)
-        i += 1
-    return "".join(chars), in_triple, triple_ch, in_block
-def code_lines(source: str) -> Iterator[Tuple[int, str]]:
-    in_triple = False
-    triple_ch = ""
-    in_block = False
-    for lineno, raw in enumerate(source.splitlines(), start=1):
-        reduced, in_triple, triple_ch, in_block = _scan_line(
-            raw, in_triple, triple_ch, in_block
-        )
-        if _is_regex_definition(reduced):
-            continue  # regex pattern definitions must not match their own text
-        yield lineno, reduced
-_REGEX_DEFINITION = re.compile(r"\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:re\.)?(?:compile|fullmatch|match|search|findall|finditer|sub|split)\s*\(")
-def _is_regex_definition(reduced: str) -> bool:
-    return bool(_REGEX_DEFINITION.match(reduced))
-# ----- 文件: rules/injection.py (46 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_SQL_CONCAT_PY = re.compile(
-    r"\b(execute|executemany|cursor\.execute|db\.query|query_all|query_one|run_query|cursor3\.execute|db.execute)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
-    re.I,
-)
-RE_SQL_FSTRING_ASSIGN = re.compile(
-    r"""^\s*[A-Za-z_]\w*\s*=\s*f["'][^"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE).*\{[^}]+}""",
-    re.I,
-)
-RE_SQL_CONCAT_JS = re.compile(
-    r"\b(db\.(query|run|all|get)|mysql\.query|pg\.query|knex\.raw|sequelize\.query)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
-    re.I,
-)
-RE_SHELL_CONCAT = re.compile(
-    r"\b(subprocess\.(call|run|Popen|check_output|check_call)\s*\(\s*[\"'][^\"']*[\"']\s*\+|os\.system\s*\(\s*\w+.*\+|exec\s*\(\s*[\"'][^\"']*\+|spawn\s*\(\s*[\"']),",
-    re.I,
-第 19 页 共 60 页
-cursor-scan V1.0
-
-)
-RE_DANGEROUS_SHELL = re.compile(
-    r"\b(shell\s*=\s*True|shell:\s*true)\b", re.I
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
-                        line=line, message=msg, fix=fix, dimension="injection")
-    for lineno, raw in code_lines(code):
-        if "import " in raw or "from " in raw:
-            continue
-        line = raw
-        if RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line):
-            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
-                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
-        if RE_SQL_CONCAT_JS.search(line):
-            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
-                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
-        if RE_SHELL_CONCAT.search(line):
-            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
-                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
-        if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
-            findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
-                                "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))
-    return findings
-# ----- 文件: rules/permissions.py (28 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_CHMOD_0777 = re.compile(
-)
-RE_MKDIR_WORLD = re.compile(
-)
-RE_TMP_WRITE = re.compile(
-    r"\bopen\s*\(\s*[\"']/tmp/[^)\"']*",
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity="high", file=source_path,
-                        line=line, message=msg, fix=fix, dimension="permissions")
-    for lineno, raw in code_lines(code):
-        if RE_CHMOD_0777.search(raw):
-            findings.append(hit(lineno, "perms.chmod_world_writable", "世界可写 chmod",
-                                "设置文件/目录为 0777 或 0666，任何用户可写", "改为 0o600/0o700"))
-        if RE_MKDIR_WORLD.search(raw):
-            findings.append(hit(lineno, "perms.world_writable_dir", "世界可写目录",
-第 20 页 共 60 页
-cursor-scan V1.0
-
-                                "以 0777 创建目录", "使用 0o700 (私有目录)"))
-        if RE_TMP_WRITE.search(raw):
-            findings.append(hit(lineno, "perms.tmp_write_insecure", "不安全 /tmp 写入",
-                                "直接写 /tmp 易受符号链接攻击 (symlink attack)", "使用 tempfile.mkstemp 私有文件"))
-    return findings
-# ----- 文件: rules/secrets.py (80 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_AWS_AKEY = re.compile(r"\b(AKIA|ASIA|ABCDEFGHIJKLMNOPQRSTUVWXYZ)[A-Z0-9]{16,20}\b")
-RE_AWS_SKEY = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")  # too noisy; keep as helper only
-RE_SLACK_TOKEN = re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")
-RE_GITHUB_TOKEN = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")
-RE_GOOGLE_API = re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b")
-RE_JWT_GENERIC = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.([A-Za-z0-9_-]{8,})?")
-RE_STRIPE = re.compile(r"\b(sk_live_[0-9A-Za-z]{20,}|rk_live_[0-9A-Za-z]{20,})\b")
-RE_PEM_PRIVATE = re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
-RE_OP_SSH = re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----")
-RE_GENERIC_KEY = re.compile(
-)
-STRONG_HINT_KEYS = re.compile(
-    r"credential|auth|pem|salt|key)(?:_|$)",
-    re.I,
-)
-LOW_ENTROPY = re.compile(
-    r"""^["'"?]+$|^[0-9]{1,6}$|^(true|false|null|none|xxx|changeme|change_me|example|test|default)$|^[x*]{4,}$""",
-    re.I,
-)
-PLACEHOLDER_VALUES = re.compile(
-    r"^(your|my|example|sample|demo|replace|test|dummy|fake|changeme|change-me|local|prod|staging|dev|default|foo|bar|\.\.\.|xxxxx+)\w*$|^\{\{\w+\}\}$|^env\(.+\)$|^process\.env\..+$|^os\.environ\.get\(.+\)$|\$",
-    re.I,
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str, sev: str = "critical") -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity=sev, file=source_path,
-                        line=line, message=msg, fix=fix, dimension="secrets")
-    if RE_PEM_PRIVATE.search(code) or RE_OP_SSH.search(code):
-        for lineno, raw in enumerate(code.splitlines(), start=1):
-            if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
-                findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
-                                    "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
-    for lineno, raw in code_lines(code):
-        stripped = raw.strip()
-        if stripped.startswith("#"):
-            continue
-        if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
-            continue
-第 21 页 共 60 页
-cursor-scan V1.0
-
-        if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
-            findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
-                                "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
-            continue
-        if RE_STRIPE.search(raw):
-            findings.append(hit(lineno, "secrets.stripe_key", "硬编码 Stripe 密钥",
-                                "检测到 live Stripe key", "使用环境变量 / 密钥管理"))
-            continue
-        if RE_GITHUB_TOKEN.search(raw):
-            findings.append(hit(lineno, "secrets.github_token", "硬编码 GitHub Token",
-                                "检测到 GitHub token", "改用环境变量，撤销泄露 token"))
-            continue
-        if RE_SLACK_TOKEN.search(raw):
-            findings.append(hit(lineno, "secrets.slack_token", "硬编码 Slack Token",
-                                "检测到 Slack bot token", "使用环境变量"))
-            continue
-        if RE_GOOGLE_API.search(raw):
-            findings.append(hit(lineno, "secrets.google_api_key", "硬编码 Google API Key",
-                                "检测到 Google API key", "使用环境变量 / Google Secret Manager"))
-            continue
-        if RE_AWS_AKEY.search(raw):
-            findings.append(hit(lineno, "secrets.aws_access_key", "硬编码 AWS 访问密钥 ID",
-                                "检测到 AWS Access Key ID", "移除，使用 IAM 角色 / AWS Secrets Manager"))
-        m = RE_GENERIC_KEY.match(raw)
-        if m:
-            key, val = m.group("key"), m.group("val")
-            if STRONG_HINT_KEYS.search(key):
-                cleaned = val.strip("'\"")
-                if LOW_ENTROPY.match(cleaned) or PLACEHOLDER_VALUES.search(cleaned):
-                    continue
-                if len(cleaned) < 10:
-                    continue
-                findings.append(hit(lineno, "secrets.hardcoded_key", "硬编码密钥/口令",
-                                    f"变量 {key} 被赋为硬编码值", "改为从环境变量 / 密钥管理读取",
-                                    sev="high"))
-    return findings
-# ----- 文件: rules/xss.py (59 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_DOM_SINK = re.compile(
-    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]",
-    re.I,
-)
-RE_DANGEROUS_REACT = re.compile(
-    r"\bdangerouslySetInnerHTML\b",
-    re.I,
-)
-第 22 页 共 60 页
-cursor-scan V1.0
-
-RE_DOCUMENT_WRITE = re.compile(
-    r"""\bdocument\.write(?:ln)?\s*\(\s*(?!["'`](?:[^"'`\\]|\\.)*["'`]\s*\))""",
-    re.I,
-)
-RE_DOC_TEMPLATE_INTERP = re.compile(
-    r"""\bdocument\.write(?:ln)?\s*\(\s*`[^`]*\$\{""",
-)
-RE_TEMPLATE_RENDER = re.compile(
-    r"\b(render_template_string|flask\.Markup|markupsafe\.Markup|\bMarkup)\s*\(",
-)
-RE_AUTOESCAPE_OFF = re.compile(
-    r"(\{%\s*autoescape\s+(false|off)\s*%\}|\|\s*safe\b)",
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str,
-            severity: str = "medium") -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity=severity,
-                        file=source_path, line=line, message=msg, fix=fix,
-                        dimension="xss")
-    for lineno, raw in code_lines(code):
-        if "import " in raw or "from " in raw:
-            continue
-        line = raw
-        if RE_DOM_SINK.search(line):
-            findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
-                                "用户输入可触发 XSS",
-                                "改用 textContent / innerText，或先做 HTML 转义"))
-        if RE_DANGEROUS_REACT.search(line):
-            findings.append(hit(lineno, "xss.dangerous_react", "React 危险 HTML",
-                                "dangerouslySetInnerHTML 直接渲染原始 HTML",
-                                "使用 React 子节点或先转义 __html 内容"))
-        if RE_DOCUMENT_WRITE.search(line) or RE_DOC_TEMPLATE_INTERP.search(line):
-            findings.append(hit(lineno, "xss.document_write", "document.write",
-                                "document.write 写入非字面量内容",
-                                "改用 DOM API (textContent / createElement)"))
-        if RE_TEMPLATE_RENDER.search(line):
-            findings.append(hit(lineno, "xss.template_render", "模板渲染未转义",
-                                "render_template_string / Markup 未转义地渲染用户输入",
-                                "启用自动转义并使用 render_template，避免 Markup 包裹用户输入",
-                                severity="high"))
-        if RE_AUTOESCAPE_OFF.search(line):
-            findings.append(hit(lineno, "xss.template_render", "关闭模板转义",
-                                "Jinja 自动转义被关闭或将变量标记为 safe",
-                                "保持 autoescape 开启，移除 |safe 过滤器"))
-    return findings
-# ----- 文件: scan.py (207 行) -----
-from __future__ import annotations
-import json
-import os
-第 23 页 共 60 页
-cursor-scan V1.0
-
-import re
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
-from .ignore import IgnorePattern, compile_ignores
-from .models import Evidence, ScanResult, Scorecard
-from .rules import (access_control, crypto, deps, deserialization, injection,
-                    permissions, secrets, xss)
-from .scanners import ast as ast_scanners
-SKIP_DIRS = {
-    ".git", ".hg", ".svn", ".bzr",
-    "node_modules", "bower_components",
-    ".venv", "venv", "env", "virtualenv",
-    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    ".next", ".nuxt", "dist", "build", ".cache", ".tox", ".eggs",
-    ".future-code", ".idea", ".vscode",
-}
-SKIP_EXTS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".svg",
-    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".zip", ".tar", ".gz",
-    ".xz", ".bz2", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib", ".o", ".a",
-    ".pyc", ".pyo", ".class", ".jar", ".lock", ".min.js", ".map",
-}
-_BINARY_RE = re.compile(rb"[\x00\x01\x02]")
-TEXT_EXTS = {
-    ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
-    ".rb", ".php", ".go", ".rs", ".java", ".kt", ".sh", ".bash", ".zsh", ".pl",
-    ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".sql", ".vue",
-    ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
-    ".tf", ".cfg", ".conf",
-}
-ALWAYS_TEXT = {
-    "Dockerfile", "docker-compose.yml", "docker-compose.yaml", "Makefile",
-    "requirements.txt", "package.json", "package-lock.json", "Pipfile",
-    "Pipfile.lock", ".env", ".npmrc", ".pypirc", "Gemfile", "Gemfile.lock",
-    "composer.json", "go.mod", "go.sum", "Cargo.toml", "setup.py", "pyproject.toml",
-    "Procfile", ".gitlab-ci.yml", ".github", ".dockerignore", "README.md",
-}
-CONFIG_NAME = ".cursor-scan.json"
-@dataclass
-class ScanOptions:
-    max_bytes: int = 2 * 1024 * 1024  # skip files larger than 2 MB
-    follow_symlinks: bool = False
-    ignore_patterns: List[IgnorePattern] = field(default_factory=list)
-def _is_binary(data: bytes) -> bool:
-    head = data[:8192]
-    return bool(_BINARY_RE.search(head)) or b"\x00" in head
-def _read_text(path: str, max_bytes: int) -> Tuple[str, Optional[str]]:
-    try:
-第 24 页 共 60 页
-cursor-scan V1.0
-
-        stat = os.stat(path)
-    except OSError:
-        return "", "unreadable"
-    if stat.st_size > max_bytes:
-        return "", "too_large"
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    except OSError:
-        return "", "unreadable"
-    if _is_binary(data):
-        return "", "binary"
-    try:
-        return data.decode("utf-8", errors="strict"), None
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace"), "encoding"
-def _iter_source_files(root: str, opts: ScanOptions) -> Iterable[str]:
-    root = os.path.abspath(root)
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=opts.follow_symlinks):
-        dirnames[:] = sorted(
-            d for d in dirnames
-            if d not in SKIP_DIRS and not d.startswith(".")
-        )
-        for name in sorted(filenames):
-            if name == CONFIG_NAME:
-                continue  # the tool's own config is never scanned
-            rel = os.path.relpath(os.path.join(dirpath, name), root)
-            low = name.lower()
-            ext = os.path.splitext(low)[1]
-            if ext in SKIP_EXTS:
-                continue
-            if low in ALWAYS_TEXT or ext in TEXT_EXTS:
-                yield rel
-def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
-    if not src:
-        return
-    lang = ast_scanners.lang_for_file(rel)
-    if lang == "python":
-        try:
-            ast_scanners.analyze_python(path_of(root, rel), src, findings)
-        except Exception as exc:  # never let one file crash a scan
-            findings.append(_internal_error(path_of(root, rel), exc))
-    elif lang in ("javascript", "typescript"):
-        try:
-            ast_scanners.analyze_jsts(path_of(root, rel), src, findings)
-        except Exception as exc:
-            findings.append(_internal_error(path_of(root, rel), exc))
-    for runner in (crypto, injection, deserialization, permissions):
-        findings.extend(runner.analyze_code(path_of(root, rel), src))
-    findings.extend(secrets.analyze_code(path_of(root, rel), src))
-第 25 页 共 60 页
-cursor-scan V1.0
-
-    findings.extend(deps.analyze_code(path_of(root, rel), src))
-    findings.extend(xss.analyze_code(path_of(root, rel), src))
-def path_of(root: str, rel: str) -> str:
-    return os.path.join(root, rel)
-def _internal_error(path: str, exc: Exception) -> Evidence:
-    return Evidence(
-        rule_id="internal.scan_error",
-        title="扫描器异常",
-        severity="low",
-        file=path,
-        line=0,
-        message=f"AST 扫描失败: {exc}",
-        fix="检查文件语法",
-        dimension="injection",
-    )
-def _load_config(target: str) -> List[IgnorePattern]:
-    cfg = os.path.join(target, CONFIG_NAME)
-    if not os.path.isfile(cfg):
-        return []
-    try:
-        with open(cfg, "r", encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError):
-        return []
-    specs = doc.get("ignore", []) if isinstance(doc, dict) else []
-    if not isinstance(specs, list):
-        return []
-    return compile_ignores([s for s in specs if isinstance(s, str)])
-def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResult:
-    options = options or ScanOptions()
-    target = os.path.abspath(target)
-    started = time.monotonic()
-    result = ScanResult(
-        target=target,
-        started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    )
-    if not os.path.isdir(target):
-        raise NotADirectoryError(f"扫描目标不存在或不是目录: {target}")
-    patterns = list(options.ignore_patterns) + _load_config(target)
-    rels = sorted(_iter_source_files(target, options))
-    file_texts: Dict[str, List[Tuple[int, str]]] = {}
-    for rel in rels:
-        path = os.path.join(target, rel)
-        src, _ = _read_text(path, options.max_bytes)
-        if not src:
-            result.skipped_files += 1
-            continue
-        result.scanned_files += 1
-        _scan_file(target, rel, src, result.findings)
-        file_texts[rel] = list(enumerate(src.splitlines(), start=1))
-第 26 页 共 60 页
-cursor-scan V1.0
-
-    access_control.analyze_project(file_texts, result.findings)
-    result.duration_sec = round(time.monotonic() - started, 3)
-    _finalize(result, patterns, target)
-    _backfill_snippets(result, file_texts, target)
-    return result
-def _backfill_snippets(result: ScanResult,
-                       file_texts: Dict[str, List[Tuple[int, str]]],
-                       target: str) -> None:
-    by_path: Dict[str, List[Tuple[int, str]]] = dict(file_texts)
-    for rel, lines in file_texts.items():
-        by_path[os.path.join(target, rel)] = lines
-    for f in list(result.findings) + list(result.suppressed):
-        if f.code_snippet or f.line <= 0:
-            continue
-        lines = by_path.get(f.file)
-        if lines is None:
-            try:
-                lines = by_path.get(os.path.relpath(f.file, target))
-            except ValueError:
-                lines = None
-        if lines and 0 < f.line <= len(lines):
-            f.code_snippet = lines[f.line - 1][1].strip()
-def _finalize(result: ScanResult, patterns: List[IgnorePattern] = (),
-              target: str = "") -> None:
-    seen: set = set()
-    unique: List[Evidence] = []
-    for f in result.findings:
-        key = (f.rule_id, f.file, f.line)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(f)
-    unique.sort(key=lambda f: (f.file, f.line, f.rule_id))
-    result.findings = unique
-    suppressed: List[Evidence] = []
-    if patterns:
-        target_abs = os.path.abspath(target)
-        kept: List[Evidence] = []
-        for f in result.findings:
-            try:
-                rel = os.path.relpath(f.file, target_abs)
-            except ValueError:  # f.file on a different drive (Windows)
-                rel = f.file
-            if any(p.matches(f.rule_id, rel, f.line) for p in patterns):
-                suppressed.append(f)
-            else:
-                kept.append(f)
-        result.findings = kept
-        result.suppressed = suppressed
-    counts: Dict[str, int] = {}
-第 27 页 共 60 页
-cursor-scan V1.0
-
-    for f in result.findings:
-        counts[f.severity] = counts.get(f.severity, 0) + 1
-    result.summary = counts
-    Scorecard.from_result(result)
-# ----- 文件: scanners/ast.py (287 行) -----
-from __future__ import annotations
-import tree_sitter_javascript
-import tree_sitter_python
-import tree_sitter_typescript
-from tree_sitter import Language, Parser
-from ..models import Evidence
-_LANG_CACHE: dict = {}
-def _language(name: str):
-    if name not in _LANG_CACHE:
-        if name == "python":
-            lang = Language(tree_sitter_python.language())
-        elif name == "javascript":
-            lang = Language(tree_sitter_javascript.language())
-        else:  # typescript
-            lang = Language(tree_sitter_typescript.language_typescript())
-        _LANG_CACHE[name] = lang
-    return _LANG_CACHE[name]
-_PARSER_CACHE: dict = {}
-_ext_to_lang = {
-    ".py": "python",
-    ".pyi": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".mts": "typescript",
-    ".cts": "typescript",
-}
-def lang_for_file(path: str):
-    import os
-    low = path.lower()
-    for ext, lang in _ext_to_lang.items():
-        if low.endswith(ext):
-            return lang
-    return None
-def _parser(lang: str) -> Parser:
-    if lang not in _PARSER_CACHE:
-        _PARSER_CACHE[lang] = Parser(_language(lang))
-    return _PARSER_CACHE[lang]
-def parse(source: str, lang: str):
-    return _parser(lang).parse(source.encode("utf-8", errors="surrogatepass"))
-def collect_calls(root, src: str):
-    stack = [root]
-第 28 页 共 60 页
-cursor-scan V1.0
-
-    while stack:
-        node = stack.pop()
-        if node.type in ("call", "call_expression"):
-            yield node
-        stack.extend(node.children)
-def call_fn_name(node, src: str) -> str:
-    fn = node.child_by_field_name("function")
-    if fn is None:
-        return ""
-    return src[fn.start_byte:fn.end_byte]
-def args_text(node, src: str) -> str:
-    args = node.child_by_field_name("arguments")
-    if args is None:
-        return ""
-    return src[args.start_byte:args.end_byte]
-def _line_for(node) -> int:
-    return node.start_point[0] + 1
-def _ev(rule_id, title, sev, path, line, msg, fix, dimension):
-    return Evidence(rule_id=rule_id, title=title, severity=sev, file=path, line=line,
-                    message=msg, fix=fix, dimension=dimension)
-def analyze_python(path, src, findings):
-    tree = parse(src, "python")
-    root = tree.root_node
-    for call in collect_calls(root, src):
-        fn = call_fn_name(call, src)
-        args = args_text(call, src)
-        line = _line_for(call)
-        if fn in ("hashlib.md5", "hashlib.sha1", "md5", "sha1",
-                  "hashlib.new", "cryptography.hazmat.primitives.hashes.MD5",
-                  "cryptography.hazmat.primitives.hashes.SHA1"):
-            if fn.startswith("hashlib.new"):
-                if any(q in args for q in ('"md5"', "'md5'", '"sha1"', "'sha1'")):
-                    findings.append(_ev(
-                        "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
-                        f"hashlib.new 调用弱哈希 {args}", "改用 sha256", "crypto"))
-            elif fn == "md5" or fn == "sha1":
-                findings.append(_ev(
-                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "medium", path, line,
-                    f"调用 md5/sha1: {fn}()", "改用 sha256", "crypto"))
-            else:
-                findings.append(_ev(
-                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
-                    f"调用弱哈希 {fn}", "改用 sha256 (hashlib.sha256)", "crypto"))
-        if fn in ("AES.new", "AES", "DES.new", "DES3.new", "DES", "TripleDES.new",
-                  "Crypto.Cipher.DES.new", "Crypto.Cipher.DES3.new",
-                  "cryptography.hazmat.primitives.ciphers.algorithms"):
-            if "MODE.ECB" in args or "ECB" in args:
-                findings.append(_ev(
-                    "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
-                    f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
-第 29 页 共 60 页
-cursor-scan V1.0
-
-            if fn.startswith("DES") or "DES3" in fn:
-                findings.append(_ev(
-                    "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
-                    f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
-            m = _find_kw_literal(call, src, ("iv", "nonce"))
-            if m:
-                findings.append(_ev(
-                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
-                    f"加密调用 {fn} 使用固定 IV {m[2]}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
-        if fn.endswith(".new") and ("MODE.ECB" in args or "CipherMode.ECB" in args):
-            findings.append(_ev(
-                "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
-                f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
-        if fn in ("random.seed", "np.random.seed", "numpy.random.seed",
-                  "torch.manual_seed", "torch.random.manual_seed", "random.seedfn"):
-            seed_val = _arg_literal(call, src)
-            if seed_val is not None and _is_literal_scalar(seed_val):
-                findings.append(_ev(
-                    "crypto.hardcoded_seed", "硬编码随机种子", "medium", path, line,
-                    f"随机种子被硬编码为 {seed_val}", "改为随机种子 (os.urandom) 或可配置", "crypto"))
-        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads"):
-            findings.append(_ev(
-                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
-                f"pickle 反序列化 {args}", "改用 JSON / 安全序列化格式", "deserialization"))
-        if fn in ("yaml.load", "yaml.full_load_all", "yaml.load_all"):
-            if not _yaml_safe(fn, call, src, args):
-                findings.append(_ev(
-                    "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
-                    f"yaml.load 未使用安全 Loader", "改用 yaml.safe_load(data)", "deserialization"))
-        if fn == "yaml.unsafe_load" or fn == "yaml.unsafe_load_all":
-            findings.append(_ev(
-                "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
-                "显式调用 yaml.unsafe_load", "改用 yaml.safe_load", "deserialization"))
-        if fn == "eval" or fn.endswith("(eval") or fn in ("exec", "compile"):
-            if _has_external_input(call, src, args):
-                findings.append(_ev(
-                    "deser.eval", "eval/exec 外部输入", "critical", path, line,
-                    f"{fn} 接收外部输入: {args}", "重构，不使用 eval/exec 解析数据", "deserialization"))
-        if fn.endswith(".execute") or fn in ("cursor.execute", "db.execute", "conn.execute",
-                                              "execute", "executemany", "cursor3.execute",
-                                              "mysql.cursor.execute"):
-            if _contains_sql(args) and _has_concat(args):
-                findings.append(_ev(
-                    "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
-                    f"SQL 通过字符串拼接: {args}", "使用参数化查询 (?, %s)", "injection"))
-        if fn in ("os.system",) or fn.startswith("subprocess."):
-            if "shell=True" in args or "shell = True" in args:
-                if _has_concat(args):
-                    findings.append(_ev(
-                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
-第 30 页 共 60 页
-
-……（后续为其余模块代表代码接续，同样每页 50 行）……
-
-cursor-scan V1.0
-
-    def _match(pat: Optional[str], *values: str) -> bool:
-        return pat is None or any(fnmatchcase(v, pat) for v in values)
-    def matches(self, rule_id: str, relpath: str, line: int) -> bool:
-        base = os.path.basename(relpath)
-        if self.file is None and self.line is None:
-            return self._match(self.rule, rule_id, base, relpath)
-        if not self._match(self.rule, rule_id):
-            return False
-        if not self._match(self.file, base, relpath):
             return False
         if self.line is not None and line != self.line:
             return False
         return True
+
+
 def compile_ignores(specs: List[str]) -> List[IgnorePattern]:
+    """Parse a list of pattern strings into matchable ``IgnorePattern``s."""
     return [IgnorePattern.parse(s) for s in specs]
+
+
 def is_suppressed(pattern: IgnorePattern, rule_id: str,
                   relpath: str, line: int) -> bool:
     return pattern.matches(rule_id, relpath, line)
 # ----- 文件: models.py (114 行) -----
+"""Data models shared across scan rules, scoring and reporting."""
+
 from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
 SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+# Canonical scoring dimensions used by the scorecard.
 DIMENSIONS = [
     "crypto",
     "secrets",
@@ -1633,6 +679,7 @@ DIMENSIONS = [
     "dependencies",
     "xss",
 ]
+
 DIMENSION_LABELS = {
     "crypto": "弱密码学",
     "secrets": "硬编码秘密",
@@ -1643,22 +690,30 @@ DIMENSION_LABELS = {
     "dependencies": "依赖风险",
     "xss": "跨站脚本 (XSS)",
 }
+
+
 @dataclass
+第 13 页 共 60 页
+cursor-scan V1.0
+
 class Evidence:
+    """A single rule hit with file/line evidence and a fix suggestion."""
+
     rule_id: str
     title: str
     severity: str
     file: str
-第 31 页 共 60 页
-cursor-scan V1.0
-
     line: int
     message: str
     fix: str
     dimension: str = "crypto"
     code_snippet: str = ""
+
+
 @dataclass
 class ScanResult:
+    """Aggregated scan result for one project scan."""
+
     target: str
     findings: List[Evidence] = field(default_factory=list)
     scanned_files: int = 0
@@ -1670,23 +725,34 @@ class ScanResult:
     dimensions: Dict[str, "DimensionScore"] = field(default_factory=dict)
     summary: Dict[str, int] = field(default_factory=dict)
     suppressed: List[Evidence] = field(default_factory=list)
+
     def add(self, evidence: Evidence) -> None:
         self.findings.append(evidence)
+
     def scorecard(self) -> "Scorecard":
         return Scorecard.from_result(self)
+
+
 @dataclass
 class DimensionScore:
     dimension: str
     score: int
     findings: List[Evidence] = field(default_factory=list)
+
     @property
     def count(self) -> int:
         return len(self.findings)
+
+
 @dataclass
 class Scorecard:
+第 14 页 共 60 页
+cursor-scan V1.0
+
     overall: int
     grade: str
     dimensions: Dict[str, DimensionScore]
+
     @staticmethod
     def from_result(result: ScanResult) -> "Scorecard":
         result.dimensions = Scorecard.compute(result.findings)
@@ -1698,13 +764,12 @@ class Scorecard:
             grade=grade,
             dimensions=result.dimensions,
         )
+
     @staticmethod
     def compute(findings: List[Evidence]) -> Dict[str, DimensionScore]:
+        """Per-dimension score: start at 100, subtract severity-weight per finding."""
         dim_map: Dict[str, DimensionScore] = {
             d: DimensionScore(dimension=d, score=100) for d in DIMENSIONS
-第 32 页 共 60 页
-cursor-scan V1.0
-
         }
         weights = {
             "low": 5,
@@ -1719,6 +784,7 @@ cursor-scan V1.0
             ds.findings.append(f)
             ds.score = max(0, ds.score - weights.get(f.severity, 5))
         return dim_map
+
     @staticmethod
     def grade_overall(dims: Dict[str, DimensionScore]) -> tuple[int, str]:
         if dims:
@@ -1733,16 +799,32 @@ cursor-scan V1.0
             grade = "C"
         elif overall >= 40:
             grade = "D"
+第 15 页 共 60 页
+cursor-scan V1.0
+
         else:
             grade = "F"
         return overall, grade
+
+
 def status_from_severity(sev: str) -> int:
     return SEVERITY_ORDER.get(sev, 2)
-# ----- 文件: rules/access_control.py (73 行) -----
+# ----- 文件: rules/__init__.py (0 行) -----
+"""Rule registry: one module per scanning concern."""
+# ----- 文件: rules/access_control.py (69 行) -----
+"""Missing auth on routes (Flask/FastAPI/Django + Express).
+
+Heuristic AST analysis: if a project has any auth-related middleware/decorators
+and also exposes route handlers without auth, flag the handler.
+"""
+
 from __future__ import annotations
+
 import re
 from typing import Dict, List, Tuple
+
 from ..models import Evidence
+
 AUTH_INDICATORS = {
     "py": ["login_required", "auth_required", "require_auth", "permission_required",
            "authorization", "auth.login", "jwt_required", "token_required", "login_required",
@@ -1750,18 +832,30 @@ AUTH_INDICATORS = {
     "js": ["auth", "authMiddleware", "requireAuth", "withAuth", "isAuthenticated",
            "passport", "jwt", "csrf", "authorize", "checkAuth", "middleware"],
 }
+
 ROUTE_DECORATOR = re.compile(r"@(?:app\.|bp\.|router\.)?(route|get|post|put|delete|patch)")
-EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch|use)\s*\(")
+# ``use`` is deliberately excluded: ``app.use(express.json())`` middleware
+# mounts (body parsers, logging, CORS) are not routes and would be a noisy FP.
+EXPRESS_ROUTE = re.compile(r"\bapp\.(get|post|put|delete|patch)\s*\(")
 FASTAPI_ROUTE = re.compile(r"@(?:app|router)\.(get|post|put|delete|patch)")
+
+
 def _new_evidence(file: str, line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
     return Evidence(rule_id=rule_id, title=title, severity="high", file=file, line=line,
-第 33 页 共 60 页
-cursor-scan V1.0
-
                     message=msg, fix=fix, dimension="access_control")
+
+
 def analyze_project(files: Dict[str, List[Tuple[int, str]]],
                     findings_out: List[Evidence]) -> None:
+    """files: {rel_path: [(lineno, text), ...]} for all code files.
+
+    Runs project-wide because auth detection is project-level.
+    """
     has_any_auth = False
+第 16 页 共 60 页
+cursor-scan V1.0
+
+    # project has any file that references an auth token/decorator
     for path, lines in files.items():
         for _, text in lines:
             low = text.lower()
@@ -1771,13 +865,21 @@ def analyze_project(files: Dict[str, List[Tuple[int, str]]],
                 break
         if has_any_auth:
             break
+
+    # Only flag if the project otherwise demonstrates auth being a concern;
+    # otherwise a tiny script with no auth at all is normal (avoid FP).
     if not has_any_auth:
         return
+
     _flag_python(files, findings_out)
     _flag_js(files, findings_out)
+
+
 _AUTH_DECORATORS = ("login_required", "jwt_required", "auth_required",
                    "require_auth", "token_required", "permission_required",
                    "role_required", "admin_required")
+
+
 def _flag_python(files, out) -> None:
     for path, lines in files.items():
         if not path.endswith(".py"):
@@ -1786,6 +888,11 @@ def _flag_python(files, out) -> None:
             s = text.strip()
             if not ROUTE_DECORATOR.search(text):
                 continue
+            # A route decorator is one line of a contiguous `@`-decorator block
+            # above a function definition. Gather the whole block (lines before
+            # AND after the route line) and look for any explicit auth
+            # decorator -- e.g. `@app.route(x)` then `@login_required` is
+            # exactly how a secured handler is written.
             lo = hi = i
             while lo - 1 >= 0 and lines[lo - 1][1].strip().startswith("@"):
                 lo -= 1
@@ -1798,32 +905,47 @@ def _flag_python(files, out) -> None:
             if auth_present:
                 continue
             out.append(_new_evidence(
+第 17 页 共 60 页
+cursor-scan V1.0
+
                 path, lineno, "access_control.missing_auth", "路由缺少鉴权",
                 f"路由处理器缺少登录/鉴权装饰器 (文件内的其他请求已使用鉴权)，"
                 f"所在装饰器块：{block.strip()}",
                 "添加 @login_required / @jwt_required 装饰器"))
+
+
 def _flag_js(files, out) -> None:
     for path, lines in files.items():
         if not (path.endswith(".js") or path.endswith(".ts") or path.endswith(".tsx")):
             continue
         for lineno, text in lines:
             if not EXPRESS_ROUTE.search(text) and not FASTAPI_ROUTE.search(text):
-第 34 页 共 60 页
-cursor-scan V1.0
-
                 continue
+            # look at the same line for auth-ish chaining
             if any(an in text for an in ["authMiddleware", "requireAuth", "passport.authenticate",
                                           "isAuthenticated", "jwt", "verifyToken", "authorize"]):
                 continue
+            # check next few lines for middleware in the handler body
             out.append(_new_evidence(
                 path, lineno, "access_control.missing_auth", "路由缺少鉴权",
                 "Express/Fastify 路由未附加任何鉴权中间件", "在路由上加装 requireAuth 中间件"))
-# ----- 文件: rules/crypto.py (51 行) -----
+# ----- 文件: rules/crypto.py (46 行) -----
+"""Weak crypto rules: md5/sha1 unsafe usage, DES, ECB, fixed IV, hardcoded seeds.
+
+Works at AST level for Python and JS/TS (via tree-sitter) and falls back to
+regex for other languages / unparsed snippets.
+"""
+
 from __future__ import annotations
+
 import re
 from typing import List
+
 from ..models import Evidence
 from .helpers import code_lines
+
+# --- regex fallbacks (non-Python/JS, or undecided) --------------------------
+
 RE_MD5_CALL = re.compile(r"\b(authlib\.jose\.|Cryptodome\.Hash\.|Crypto\.Hash\.|hashlib\.(?:new\s*\(\s*[\"'])?)md5\b", re.I)
 RE_SHA1_HASH = re.compile(r"\b(hashlib\.sha1|SHA1\b|Cryptodome\.Hash\.SHA1|Crypto\.Hash\.SHA1)")
 RE_DES = re.compile(r"\b(des|des3|tripledes)\b", re.I)
@@ -1832,9 +954,17 @@ RE_HARDCODED_IV = re.compile(
     r"\b(aes|cipher)(?:\.\w+|\s+\()\s*[^)\n]{0,40}(iv|nonce)\s*=\s*([\"'][^\"']+[\"']|b?[\"'][0-9a-fA-F]{8,}[\"']|[0-9]{5,})", re.I
 )
 RE_HARDCODED_SEED = re.compile(
+    r"\b(random|torch|np?\.random|numpy\.random)(\.seed|\.manual_seed)\s*\(\s*(0|[1-9]\d{0,5}|-?[1-9])\s*\)"
 )
+
+
+第 18 页 共 60 页
+cursor-scan V1.0
+
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
+    """Regex fallback for weak-crypto findings."""
     findings: List[Evidence] = []
+
     def hit(line: int, rule_id: str, title: str, message: str, fix: str, sev: str = "high") -> Evidence:
         return Evidence(
             rule_id=rule_id,
@@ -1847,8 +977,11 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             dimension="crypto",
             code_snippet="",
         )
+
     for lineno, raw in code_lines(code):
         line = raw
+        # Import / from-import lines are nothing but a name binding; real usage
+        # of a weak algorithm is detected at call sites (regex + AST).
         if line.lstrip().startswith(("import ", "from ")):
             continue
         if RE_HARDCODED_SEED.search(line):
@@ -1861,9 +994,6 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (MD5)",
                                 "MD5 已被破解，不应用于安全场景", "改用 SHA-256 / SHA-3 (hashlib.sha256)"))
         if RE_SHA1_HASH.search(line):
-第 35 页 共 60 页
-cursor-scan V1.0
-
             findings.append(hit(lineno, "crypto.md5_or_sha1", "弱哈希算法 (SHA1)",
                                 "SHA-1 碰撞攻击成本已被学界证实", "改用 SHA-256 / SHA-3"))
         if RE_DES.search(line):
@@ -1873,14 +1003,33 @@ cursor-scan V1.0
             findings.append(hit(lineno, "crypto.ecb_mode", "不安全加密模式 (ECB)",
                                 "ECB 模式相同明文块产生相同密文块，泄露结构信息", "改用 GCM / CBC + 随机 IV"))
     return findings
-# ----- 文件: rules/deps.py (131 行) -----
+# ----- 文件: rules/deps.py (126 行) -----
+"""Dependency risk (P3): known-vulnerable and unpinned packages in
+requirements*.txt / package.json.
+
+Uses a small curated, static CVE table so it runs fully offline.  A pin at or
+below a package's last-vulnerable release is flagged with its advisory; an
+unpinned / floating specifier (``>=``, ``*``, ``latest`` ...) gets a low
+severity reproducibility warning.  This is *not* a live advisory feed —
+第 19 页 共 60 页
+cursor-scan V1.0
+
+replacing the table with an OSV-style lookup is a future integration point.
+"""
+
 from __future__ import annotations
+
 import json
 import os
 import re
 from typing import Dict, List, Optional, Tuple
+
 from ..models import Evidence
+
 DIMENSION = "dependencies"
+
+# Lowercased package name -> [(last_vulnerable_version, CVE, severity, note)].
+# A pinned version <= the last_vulnerable entry is reported.
 KNOWN_VULNS: Dict[str, List[Tuple[str, str, str, str]]] = {
     "flask": [("0.12.2", "CVE-2018-1000656", "medium", "超大 JSON 数组导致 DoS (debug 模式)")],
     "jinja2": [("2.10.1", "CVE-2019-8341", "critical", "沙箱逃逸，可读取服务器文件 (SSTI)")],
@@ -1898,51 +1047,88 @@ KNOWN_VULNS: Dict[str, List[Tuple[str, str, str, str]]] = {
     "moment": [("2.29.3", "CVE-2022-31129", "medium", "duration 解析 ReDoS")],
     "yargs-parser": [("18.1.1", "CVE-2020-7608", "medium", "原型污染")],
 }
+
+
+# --------------------------------------------------------------------------
+# Version comparison
+# --------------------------------------------------------------------------
+
 def _ver_tuple(version: str) -> Optional[Tuple[int, ...]]:
+    """Leading dotted-numeric prefix as an int tuple, else None."""
     m = re.match(r"^\s*v?(\d+(?:\.\d+)*)", str(version))
     if not m:
         return None
     return tuple(int(p) for p in m.group(1).split("."))
+
+
 def _cmp(a: str, b: str) -> Optional[int]:
+    """-1 / 0 / 1 when both versions parse (pad to equal width), else None."""
     ta, tb = _ver_tuple(a), _ver_tuple(b)
+第 20 页 共 60 页
+cursor-scan V1.0
+
     if ta is None or tb is None:
         return None
     n = max(len(ta), len(tb))
     ta += (0,) * (n - len(ta))
     tb += (0,) * (n - len(tb))
     return (ta > tb) - (ta < tb)
+
+
 def _known_vuln(name: str, version: str) -> Optional[Tuple[str, str, str]]:
+    """Return (CVE, severity, note) when ``version`` is at/below a known release."""
     for max_vul, cve, sev, note in KNOWN_VULNS.get(name.lower(), ()):
         c = _cmp(version, max_vul)
-第 36 页 共 60 页
-cursor-scan V1.0
-
         if c is not None and c <= 0:
             return cve, sev, note
     return None
+
+
+# --------------------------------------------------------------------------
+# Evidence building
+# --------------------------------------------------------------------------
+
 def _evidence(path: str, line: int, rule_id: str, title: str,
               msg: str, fix: str, sev: str) -> Evidence:
     return Evidence(rule_id=rule_id, title=title, severity=sev, file=path,
                     line=line, message=msg, fix=fix, dimension=DIMENSION)
+
+
 def _vuln_evidence(path: str, line: int, name: str, spec: str,
                    cve: str, sev: str, note: str) -> Evidence:
     return _evidence(
         path, line, "deps.known_vulnerable", "依赖存在已知漏洞",
         f"{name}{spec} 命中 {cve}: {note}",
         f"升级 {name} 到修复版本（参考 {cve} 公告）", sev)
+
+
 def _unpinned_evidence(path: str, line: int, name: str, spec: str) -> Evidence:
     return _evidence(
         path, line, "deps.unpinned_package", "未固定版本的依赖",
         f"{name} 使用未固定版本（{spec}），构建不可复现且可能引入含漏洞版本",
         "锁定精确版本（requirements: ==；npm: 配合 lockfile）", "low")
+
+
+# --------------------------------------------------------------------------
+# requirements*.txt
+# --------------------------------------------------------------------------
+
 _REQ_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*(==|>=|<=|~=|!=|>|<|===)?\s*([^\s;]+)?")
 _REQ_SKIP = re.compile(r"^\s*[#\-]")
+
+
+第 21 页 共 60 页
+cursor-scan V1.0
+
 def _parse_pin(spec: str) -> Tuple[Optional[str], bool]:
+    """Return (version, exact) for a requirements spec; exact==True only for ==."""
     m = _REQ_RE.match(spec)
     if not m:
         return None, False
     _, op, version = m.groups()
     return version, op in ("==", "===")
+
+
 def _check_requirements(path: str, code: str, findings: List[Evidence]) -> None:
     for lineno, raw in enumerate(code.splitlines(), start=1):
         if not raw.strip() or _REQ_SKIP.match(raw):
@@ -1957,27 +1143,42 @@ def _check_requirements(path: str, code: str, findings: List[Evidence]) -> None:
         vuln = _known_vuln(name, version)
         if vuln:
             findings.append(_vuln_evidence(path, lineno, name, f"=={version}", *vuln))
+
+
+# --------------------------------------------------------------------------
+# package.json
+# --------------------------------------------------------------------------
+
 _FLOATING = ("*", "latest", "next", "x")
+
+
 def _is_floating(spec: str) -> bool:
     s = spec.strip()
     return s in _FLOATING or s.endswith(".x") or s.startswith((">", "<"))
+
+
 def _exact_npm_version(spec: str) -> Optional[str]:
+    """Exact pins only (bare or ``=``); ranges like ^/~ never qualify."""
     s = spec.strip()
     if s.startswith(("^", "~", ">", "<")) or s in _FLOATING or s.endswith(".x"):
         return None
     m = re.match(r"=?v?(\d+(?:\.\d+)*)", s)
     if not m:
-第 37 页 共 60 页
-cursor-scan V1.0
-
         return None
     return m.group(1)
+
+
 def _find_dep_line(source_lines: List[str], name: str) -> int:
     pat = re.compile('"' + re.escape(name) + r'"\s*:')
+第 22 页 共 60 页
+cursor-scan V1.0
+
     for i, line in enumerate(source_lines, start=1):
         if pat.search(line):
             return i
     return 1
+
+
 def _check_package_json(path: str, code: str, findings: List[Evidence]) -> None:
     try:
         doc = json.loads(code)
@@ -2002,6 +1203,12 @@ def _check_package_json(path: str, code: str, findings: List[Evidence]) -> None:
             vuln = _known_vuln(name, version)
             if vuln:
                 findings.append(_vuln_evidence(path, lineno, name, f"@{spec}", *vuln))
+
+
+# --------------------------------------------------------------------------
+# Public entry point (per-file rule, runs on every text file)
+# --------------------------------------------------------------------------
+
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
     base = os.path.basename(source_path).lower()
@@ -2011,442 +1218,394 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
           or (base.startswith("requirements") and base.endswith(".txt"))):
         _check_requirements(source_path, code, findings)
     return findings
-# ----- 文件: rules/deserialization.py (42 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_PICKLE = re.compile(
-)
-RE_YAML_UNSAFE = re.compile(
-第 38 页 共 60 页
+# ----- 文件: rules/deserialization.py (183 行) -----
+"""Unsafe deserialization: pickle, unsafe yaml.load, eval/exec on non-literal input.
+
+AST hooks + regex fallback.
+"""
+第 23 页 共 60 页
 cursor-scan V1.0
 
+
+from __future__ import annotations
+
+import re
+from typing import List
+
+from ..models import Evidence
+from .helpers import code_lines
+
+RE_PICKLE = re.compile(
+    r"\b(pickle\.(loads?|load)|cPickle\.(loads?|load)|jsonpickle\.(loads?|load)"
+    r"|(?:cloudpickle|dill)\.(loads?|load)|_pickle\.(loads?|load)|joblib\.load"
+    r"|(?:pandas|pd)\.read_pickle|import marshal|marshal\.(loads?))\b"
+)
+# shelve.open(path) opens a pickle-backed database store: records written
+# by shelve round-trip through pickle, so reading an untrusted store
+# executes arbitrary code during unpickling (CWE-502) -- the store
+# counterpart of pickle.load.
+RE_SHELVE_OPEN = re.compile(r"\bshelve\.open\s*\(")
+# pickle.Unpickler(fp) is the class-based twin of pickle.load: constructing
+# it from a file handle (typically followed by .load()) unpickles the data
+# stream with the same arbitrary-code-execution surface.
+RE_UNPICKLER = re.compile(r"\b(?:_?pickle)\.Unpickler\s*\(")
+# Keras load_model reads a serialized model archive: the .keras zip format
+# embeds pickled objects and the legacy .h5 container reconstructs custom
+# objects from metadata, so an untrusted model is arbitrary code execution
+# during loading (CWE-502), the ML-ecosystem counterpart of joblib.load.
+# There is no safe-flag counterpart, so any load_model call flags (joblib
+# precedent). Covers plain and tf.keras qualifications of the classic
+# keras.models entry point and the Keras-3 keras.saving home.
+RE_KERAS_LOAD_MODEL = re.compile(
+    r"\b(?:tf\.)?keras\.(?:models|saving)\.load_model\s*\(",
+)
+# Keras load_model reads a serialized model archive: the .keras zip format
+# embeds pickled objects and the legacy .h5 container also reconstructs
+# custom objects through the config, and Keras' own docs warn that loading an
+# untrusted model can execute arbitrary code (CWE-502) -- the ML-ecosystem
+# twin of joblib.load.  There is no safe-flag counterpart, so any load_model
+# call flags.  Covers the classic keras.models entry point and the Keras 3
+# keras.saving home, plus both plain and tf.keras qualification.
+RE_KERAS_LOAD_MODEL = re.compile(
+    r"\b(?:tf\.)?keras\.(?:models|saving)\.load_model\s*\(",
+)
+# Python stdlib XML parsers resolve external entities by default (CWE-611
+# XXE): xml.etree / xml.dom / xml.sax / xml.parsers.expat all let a document's
+# DOCTYPE read local files and probe internal hosts during parsing. defusedxml
+# is the safe replacement; lxml does not resolve external entities by default
+# and stays quiet. Both the fully-qualified spellings (xml.etree.ElementTree.
+# parse) and the bare module names (minidom / pulldom / ElementTree after a
+# from-import) are covered.
+第 24 页 共 60 页
+cursor-scan V1.0
+
+RE_XML_PARSE = re.compile(
+    r"\b(?:xml\.etree\.(?:c?ElementTree)\.(?:parse|fromstring|XML|iterparse)"
+    r"|xml\.dom\.minidom\.(?:parse|parseString)"
+    r"|xml\.dom\.pulldom\.(?:parse|parseString)"
+    r"|xml\.sax\.(?:parse|parseString|make_parser)"
+    r"|xml\.parsers\.expat\.ParserCreate"
+    r"|ElementTree\.(?:parse|fromstring|XML|iterparse)"
+    r"|minidom\.(?:parse|parseString)"
+    r"|pulldom\.(?:parse|parseString)"
+    r"|expat\.ParserCreate)\s*\(",
+)
+RE_YAML_UNSAFE = re.compile(
+    # Python (yaml.unsafe_load) plus Ruby: YAML.unsafe_load / Psych.unsafe_load
+    # (Psych >= 4 made the plain safe-loading default; unsafe_load is the
+    # explicit arbitrary-object constructor in both ecosystems).
+    r"\b(?:yaml|YAML|Psych)\.unsafe_load\b"
+)
+# PHP's libxml-based XML sinks (CWE-611 XXE): simplexml loaders, DOMDocument
+# loadXML/load, and xml_parse() all resolve external entities (unless
+# libxml_disable_entity_loader / LIBXML_NONET were opted in, which is rare and
+# itself a review signal). DOMDocument instances are held in variables, so the
+# receiver form is matched: ``->loadXML`` is DOMDocument-specific and always
+# an XML load; a bare ``->load`` additionally requires a document-hinted
+# receiver ($dom/$doc/$document/$xml...), keeping generic database/asset
+# loaders (``$db->load``) quiet. The libxml_use_internal_errors() bookkeeping
+# calls are not document loads and stay quiet.
+RE_PHP_XXE = re.compile(
+    r"(?:simplexml_load_(?:file|string)"
+    r"|\$\w+\s*->\s*loadXML"
+    r"|\$(?:dom|doc|document|xml)\w*\s*->\s*load"
+    r"|xml_parse\s*\(\s*xml_parser_create)\s*\(",
+)
+# Java's XML factory sinks (CWE-611 XXE): DocumentBuilderFactory / SAXParser
+# Factory / TransformerFactory / XMLInputFactory / SchemaFactory built with
+# newInstance()/newFactory() parse DTDs that can read local files unless the
+# well-known FEATURE_SECURE_PROCESSING / external-DTD settings are explicitly
+# applied. The builder objects themselves are the sink root -- .parse(...)
+# calls made on them later are the same object and need no separate rule.
+RE_JAVA_XXE = re.compile(
+    r"\b(?:DocumentBuilderFactory|SAXParserFactory|TransformerFactory"
+    r"|XMLInputFactory|SchemaFactory)\s*\.(?:newInstance|newFactory)\s*\(",
+)
+# .NET's XML sink family (CWE-611 XXE): XmlDocument.Load/LoadXml, XDocument/
+# XElement.Parse/Load, XmlReader.Create and XmlTextReader all resolve DTD
+# external entities during parsing, which lets a crafted document read local
+# files and probe internal hosts (classic "billion laughs" / file-read XXE).
+# Typed receiver names are unambiguous XML loads and always match (the
+# XmlDocument.LoadXml / XDocument.Parse / XmlReader.Create call shapes); a
+# bare .Load form additionally requires a document-hinted receiver
+# (doc/document/xml...), keeping generic database/asset loaders
+第 25 页 共 60 页
+cursor-scan V1.0
+
+# (``db.Load``) quiet -- mirroring the PHP DOMDocument gate. C# APIs are
+# conventionally capitalized, so the pattern is case-sensitive by design.
+RE_DOTNET_XXE = re.compile(
+    r"\b(?:XmlDocument\.(?:LoadXml|Load)"
+    r"|X(?:Document|Element)\.(?:Parse|Load)"
+    r"|XmlReader\.Create|XmlTextReader)\s*\("
+    r"|\b(?:doc|document|xml)\w*\s*\.\s*(?:LoadXml|Load)\s*\(",
 )
 RE_YAML_LOAD = re.compile(
+    r"\b(yaml\.load|yaml\.load_all)\s*\(.*"
+)
+# The only loader families that refuse to build arbitrary Python objects:
+# (C)?(Safe|Base)Loader by construction, and (C)?FullLoader which PyYAML 5.1+
+# made the safe default for yaml.load.  The bare Loader alias (PyYAML < 5.1
+# default), UnsafeLoader, and CUnsafeLoader all construct arbitrary Python
+# objects and are explicitly dangerous.
+RE_YAML_SAFE_LOADER = re.compile(
+    r"(?:yaml\.)?C?(?:Safe|Base|Full)Loader",
 )
 RE_EVAL = re.compile(r"\beval\s*\(\s*[^)\"']")
 RE_EXEC = re.compile(r"\bexec\s*\(\s*[^)\"']")
+# Node's vm module: runInThisContext / runInNewContext / runInContext execute
+# source strings -- the JS counterparts of eval. Like RE_EVAL, a static
+# literal operand stays quiet; dynamic source is the dangerous form. Both the
+# ``vm.run*`` spelling and the ``require("vm").run*`` form are covered.
+RE_VM_RUN = re.compile(
+    r"""(?:require\s*\(\s*["'](?:node:)?vm["']\s*\)|\bvm)"""
+    r"""\.(?:runInThisContext|runInNewContext|runInContext)\s*\(\s*[^)"']""",
+)
+# Ruby's Marshal: ``Marshal.load`` / ``Marshal.restore`` (alias) unpickle a
+# serialized object graph into arbitrary live objects -- the Ruby counterpart
+# of Python pickle (CWE-502).  Full constant qualification ``::Marshal`` is
+# accepted too; the Marshal.dump / Marshal.dump_to_file writer direction and
+# a bare ``load`` without the Marshal receiver stay quiet.
+RE_RUBY_MARSHAL = re.compile(
+    r"""\b(?:::)?Marshal\.(?:load|restore)\s*\(""",
+)
+# Java's native-serialization and XML-decoder sinks (CWE-502): readObject /
+# readUnshared on an ObjectInputStream reconstruct arbitrary objects, and
+# XMLDecoder instantiates arbitrary Java classes from an XML document. A
+# static literal argument is inert XML/schema content; an empty call (the
+# classic ``ois.readObject()``) or a variable/expression is an untrusted data
+# stream. Merely constructing an ObjectInputStream does not deserialize, so
+# the new-... constructor line stays quiet.
+RE_JAVA_READOBJ = re.compile(
+    r"""\.read(?:Object|Unshared)\s*\(\s*([^)"']*?)\s*\)""",
+)
+_REAJAVA_STATIC_ARG = re.compile(
+    r"""^(?:[A-Za-z_$][\w$]*\.)*[A-Z][\w$]*\s*(?:\.class)?$""",
+)
+第 26 页 共 60 页
+cursor-scan V1.0
+
+RE_JAVA_XMLDECODER = re.compile(
+    r"""\bXMLDecoder\s*\(""",
+)
+# Jackson's default typing embeds polymorphic type metadata in `@class`
+# properties that Jackson instantiates on deserialization (CWE-502): a
+# crafted payload for enableDefaultTyping/activateDefaultTyping becomes
+# arbitrary class instantiation, the Java counterpart of readObject.
+# disableDefaultTyping()/deactivateDefaultTyping() switch the feature OFF and
+# stay quiet.
+RE_JAVA_JACKSON_TYPING = re.compile(
+    r"\.(?:enableDefaultTyping|activateDefaultTyping)\s*\(",
+)
+# node-serialize's unserialize() deserializes a serialized function graph by
+# eval'ing the payload (CVE-2017-5941): any non-literal payload is arbitrary
+# code execution, the JS counterpart of Python pickle. PHP's unserialize()
+# reconstructs arbitrary PHP objects the same way (CWE-502), so the same
+# sink family covers both. The matching writer directions (serialize() /
+# node-serialize's serialize(), PHP's serialize()) and a bare static literal
+# stay quiet.
+RE_NODE_UNSERIALIZE = re.compile(
+    r"\b(?:serialize\.)?unserialize\s*\(\s*[^)\"']",
+)
+# SnakeYAML (Java) load-family sinks (CWE-502): yaml.load / loadAll / loadAs
+# instantiate arbitrary Java classes from YAML tags unless a safe-constructor
+# policy is applied -- the Java counterpart of Python yaml.load / Ruby
+# unsafe_load.  The lowercase `yaml` matches the natural Java variable name
+# (`Yaml yaml = new Yaml();`), and the capitalized `Yaml` covers a
+# static-call style; because both spellings overlap the Python/Ruby
+# lowercase-module rules, this pattern and the Python/Ruby yaml branches are
+# mutually gated on source extension in analyze_code (this one fires only in
+# .java files, the others only outside them).  The explicit safe-loader
+# opt-outs (constructor for SafeConstructor / SafeLoader / LoaderOptions)
+# switch arbitrary-object building OFF and stay quiet, mirroring
+# RE_YAML_SAFE_LOADER.  The dump() writer direction is quiet.
+RE_JAVA_YAML_LOAD = re.compile(
+    r"\b[yY]aml\s*\.\s*(?:load|loadAll|loadAs)\s*\(",
+)
+RE_JAVA_YAML_SAFE_LOADER = re.compile(
+    r"(?:SafeConstructor|SafeLoader|LoaderOptions)\s*\)",
+)
+# XStream fromXML (CWE-502): fromXML() builds live objects from an XML
+# document -- the Java XML-object-graph counterpart of readObject, historically
+# the classic remote-code-execution gadget family (CVE-2013-7285 and friends).
+# The toXML() / toXML(out, obj) writer directions stay quiet.
+RE_JAVA_XSTREAM_FROMXML = re.compile(
+    r"\.fromXML\s*\(",
+)
+# Kryo readClassAndObject (CWE-502): reads a serialized object graph built
+# from a runtime type registration -- a registered gadget class becomes an
+# arbitrary object.  Only readClassAndObject gets its own rule here; Kryo's
+第 27 页 共 60 页
+cursor-scan V1.0
+
+# plain readObject spelling already fires under RE_JAVA_READOBJ's dynamic-arg
+# gate (Kryo's readObject(Output, Type) always carries a type argument, which
+# that gate treats as dynamic).  The writeClassAndObject / writeObject writer
+# directions stay quiet.
+RE_JAVA_KRYO_READ = re.compile(
+    r"\.readClassAndObject\s*\(",
+)
+# PyTorch torch.load (CWE-502): a saved checkpoint archives pickled Python
+# objects that are reconstructed on load, so an untrusted model file is
+# arbitrary code execution -- the PyTorch twin of keras.load_model /
+# joblib.load.  PyTorch >= 2.6 flips weights_only=True (tensor-only
+# reconstruction) by default, so a same-line explicit ``weights_only=True``
+# is the safe opt-out and stays quiet (yaml.Loader precedent); load_state_dict
+# (loading tensors into an existing model) and torch.save (writer direction)
+# are not archive unpickling and stay quiet.
+RE_TORCH_LOAD = re.compile(
+    r"\b(?:torch|th)\.load\s*\(",
+)
+RE_TORCH_WEIGHTS_ONLY = re.compile(
+    r"\b(?:torch|th)\.load\s*\([^)]*weights_only\s*=\s*True\b",
+)
+# numpy.load with an explicit allow_pickle=True (CWE-502): opt-in
+# reconstruction of pickled arrays from .npy/.npz files.  numpy >= 1.16.3
+# defaults to allow_pickle=False (safe), so only the explicit True opt-in
+# flags -- mirroring the yaml.unsafe_load / Loader=UnsafeLoader gate.
+RE_NUMPY_LOAD_PICKLE = re.compile(
+    r"\b(?:numpy|np)\.load\s*\([^)]*allow_pickle\s*=\s*True\b",
+)
+# Ruby stdlib REXML (CWE-611 XXE): REXML::Document.new parses a document with
+# DTD external-entity expansion enabled, the parsing path behind the classic
+# Rails XML-params XXE (CVE-2013-0156) -- local file reads and internal-host
+# probing.  The REXML qualification keeps the ubiquitous Ruby idiom
+# ``Document.new(xml)`` quiet (a generic receiver name carries no XML signal).
+RE_RUBY_XXE = re.compile(
+    r"\bREXML\s*::\s*Document\s*(?:\.|::)\s*new\s*\(",
+)
+
+
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
+
     def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
         return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
                         line=line, message=msg, fix=fix, dimension="deserialization")
+
+    # The Jackson default-typing rule is Java-specific; like injection.py, the
+    # .java extension gate keeps it from mis-firing on other languages that
+    # happen to call a same-named method.
+    ext = source_path.rsplit(".", 1)[-1].lower() if "." in source_path else ""
+
+第 28 页 共 60 页
+cursor-scan V1.0
+
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
             if "pickle" not in raw and "marshal" not in raw and "yaml" not in raw:
                 continue
             else:
                 if "marshal" in raw:
+                    # import marshal is itself a use-risk; only flag explicit load.
                     continue
-        if RE_PICKLE.search(raw):
-            if "load" in raw or "loads" in raw:
+        m = RE_PICKLE.search(raw)
+        if m:
+            if "load" in m.group(1) or "read_pickle" in m.group(1):
                 findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
                                     "pickle 反序列化可执行任意代码", "改用 JSON/安全格式"))
-        if RE_YAML_UNSAFE.search(raw):
+        if RE_SHELVE_OPEN.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
+                                "shelve.open 打开 pickle 后端存储，读取不可信数据可执行任意代码",
+                                "改用 SQLite/JSON 等安全存储"))
+        if RE_UNPICKLER.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (pickle)",
+                                "pickle.Unpickler 反序列化可执行任意代码",
+                                "改用 JSON/安全格式"))
+        # Keras load_model reconstructs a serialized model archive (pickled
+        # objects in the .keras zip, custom-object config in .h5): an
+        # untrusted model is arbitrary code execution (CWE-502), like joblib.
+        if RE_KERAS_LOAD_MODEL.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Keras)",
+                                "load_model 读取序列化模型存档，加载不可信模型可执行任意代码",
+                                "仅加载受信任、经过校验的模型，或使用安全导出格式"))
+        if RE_XML_PARSE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "stdlib XML 解析默认解析外部实体，可读取本地文件/内网探测",
+                                "改用 defusedxml 或禁用 DTD/外部实体"))
+        # Python (lowercase yaml) and Ruby (YAML/Psych) loader branches are
+        # owned outside .java files: in Java sources the same lowercase text
+        # is a SnakeYAML variable receiver handled by RE_JAVA_YAML_LOAD, so
+        # the extension gate keeps each convention single-fire.
+        if ext != "java" and RE_YAML_UNSAFE.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.unsafe_load 可执行任意代码", "yaml.safe_load(data)"))
-        elif RE_YAML_LOAD.search(raw) and "SafeLoader" not in raw and "UnsafeLoader" not in raw:
+        elif ext != "java" and RE_YAML_LOAD.search(raw) and not RE_YAML_SAFE_LOADER.search(raw):
             findings.append(hit(lineno, "deser.yaml_load", "不安全 yaml.load",
                                 "yaml.load 需要显式安全 Loader (SafeLoader)", "yaml.safe_load(data)"))
+        if RE_PHP_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "PHP libxml 解析默认解析外部实体，可读取本地文件/内网探测",
+                                "libxml_disable_entity_loader(true) 或使用 LIBXML_NONET"))
+        if RE_JAVA_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                "Java XML 解析器默认解析 DTD 外部实体，可读取本地文件/内网探测",
+                                "设置 FEATURE_SECURE_PROCESSING 并禁用 external DTD"))
+第 29 页 共 60 页
+cursor-scan V1.0
+
+        # .NET XML sinks (C#): a document-hinted receiver rule keeps the typed
+        # and bare forms single-fire. The extension gate mirrors the Java-only
+        # gates above -- the receiver spellings (doc.Load / xml.Load) are not
+        # C#-exclusive text and must not fire in other languages.
+        if ext == "cs" and RE_DOTNET_XXE.search(raw):
+            findings.append(hit(lineno, "deser.xxe", "XXE 外部实体注入",
+                                ".NET XML 解析默认解析 DTD 外部实体，可读取本地文件/内网探测",
+                                "设置 XmlResolver = null / XmlReaderSettings 禁用 DTD 与外部实体"))
         if RE_EVAL.search(raw):
             findings.append(hit(lineno, "deser.eval", "eval 外部输入",
                                 "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))
         if RE_EXEC.search(raw):
             findings.append(hit(lineno, "deser.exec", "exec 外部输入",
                                 "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
-    return findings
-# ----- 文件: rules/helpers.py (71 行) -----
-from __future__ import annotations
-import re
-from typing import Iterator, Optional, Tuple
-def _scan_line(
-    raw: str,
-    in_triple: bool,
-    triple_ch: str,
-    in_block: bool,
-) -> Tuple[str, bool, str, bool]:
-    chars: list[str] = []
-    n = len(raw)
-    i = 0
-    while i < n:
-        if in_block:
-            end = raw.find("*/", i)
-第 39 页 共 60 页
+        if RE_VM_RUN.search(raw):
+            findings.append(hit(lineno, "deser.eval", "vm.run* 外部输入",
+                                "vm.runIn*Context 执行外部源代码，可执行任意代码",
+                                "重构解析逻辑，不使用 vm 执行用户代码"))
+        # Ruby Marshal: load/restore unpickle an object graph into live objects.
+        if RE_RUBY_MARSHAL.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Marshal)",
+                                "Marshal.load/restore 反序列化 Ruby 对象图，可执行任意代码",
+                                "改用安全的文本格式 (JSON/YAML load_serializable)"))
+        # Java native deserialization: recursive data reconstruction, the
+        # classic "trampoline" gadget chain (CWE-502). A static-literal
+        # argument (document/class-name/schema constant) is inert; an empty
+        # readObject() or a variable argument is an untrusted data stream.
+        if m := RE_JAVA_READOBJ.search(raw):
+            arg = m.group(1).strip()
+            if not arg or not _REAJAVA_STATIC_ARG.search(arg):
+                findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Java)",
+                                    "readObject/readUnshared 反序列化不受信数据流，",
+                                    "对输入做签名校验并限制 gadget 类 (ObjectInputFilter)"))
+        # XMLDecoder instantiates arbitrary Java classes from an XML document --
+        # immediate class instantiation, not just object reconstruction.
+        if RE_JAVA_XMLDECODER.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Java)",
+                                "XMLDecoder 从 XML 实例化任意 Java 类",
+                                "改用安全的解析器 (StAX/SAX) 并验证 DTD/类型"))
+        # Jackson default typing: @class metadata drives polymorphic type
+        # instantiation on deserialization.  Only meaningful in Java sources.
+        if ext == "java" and RE_JAVA_JACKSON_TYPING.search(raw):
+            findings.append(hit(lineno, "deser.pickle", "不安全反序列化 (Jackson)",
+                                "enableDefaultTyping/activateDefaultTyping 反序列化类型元数据可实例化任意类",
+                                "为 @class 属性配置 allowlist 或关闭默认类型绑定"))
+        # SnakeYAML load family: arbitrary class instantiation via YAML tags.
+        if ext == "java" and RE_JAVA_YAML_LOAD.search(raw) and not \
+                RE_JAVA_YAML_SAFE_LOADER.search(raw):
+            findings.append(hit(lineno, "deser.yaml_load", "不安全反序列化 (SnakeYAML)",
+                                "Yaml.load/loadAll/loadAs 可从 YAML 标签实例化任意 Java 类",
+第 30 页 共 60 页
 cursor-scan V1.0
 
-            if end == -1:
-                return "".join(chars), in_triple, triple_ch, True
-            i = end + 2
-            in_block = False
-            continue
-        if in_triple:
-            end = raw.find(triple_ch * 3, i)
-            if end == -1:
-                return "".join(chars), True, triple_ch, False
-            i = end + 3
-            in_triple = False
-            continue
-        ch = raw[i]
-        if raw.startswith("/*", i):
-            in_block = True
-            i += 2
-            continue
-        if ch in "\"'" and raw.startswith(ch * 3, i):
-            in_triple = True
-            triple_ch = ch
-            i += 3
-            continue
-        if ch in "\"'`":
-            chars.append(ch)
-            i += 1
-            while i < n:
-                if raw[i] == "\\" and i + 1 < n:
-                    chars.extend((raw[i], raw[i + 1]))
-                    i += 2
-                    continue
-                if raw[i] == ch:
-                    chars.append(ch)
-                    i += 1
-                    break
-                chars.append(raw[i])
-                i += 1
-            continue
-        if ch == "#" or raw.startswith("//", i):
-            break
-        chars.append(ch)
-        i += 1
-    return "".join(chars), in_triple, triple_ch, in_block
-def code_lines(source: str) -> Iterator[Tuple[int, str]]:
-    in_triple = False
-    triple_ch = ""
-    in_block = False
-    for lineno, raw in enumerate(source.splitlines(), start=1):
-        reduced, in_triple, triple_ch, in_block = _scan_line(
-            raw, in_triple, triple_ch, in_block
-        )
-第 40 页 共 60 页
-cursor-scan V1.0
 
-        if _is_regex_definition(reduced):
-            continue  # regex pattern definitions must not match their own text
-        yield lineno, reduced
-_REGEX_DEFINITION = re.compile(r"\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:re\.)?(?:compile|fullmatch|match|search|findall|finditer|sub|split)\s*\(")
-def _is_regex_definition(reduced: str) -> bool:
-    return bool(_REGEX_DEFINITION.match(reduced))
-# ----- 文件: rules/injection.py (46 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_SQL_CONCAT_PY = re.compile(
-    r"\b(execute|executemany|cursor\.execute|db\.query|query_all|query_one|run_query|cursor3\.execute|db.execute)\s*\(\s*([\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*\+)",
-    re.I,
-)
-RE_SQL_FSTRING_ASSIGN = re.compile(
-    r"""^\s*[A-Za-z_]\w*\s*=\s*f["'][^"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE).*\{[^}]+}""",
-    re.I,
-)
-RE_SQL_CONCAT_JS = re.compile(
-    r"\b(db\.(query|run|all|get)|mysql\.query|pg\.query|knex\.raw|sequelize\.query)\s*\(\s*[\"'][^\"']*(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*[\"']\s*(\+\s*|`)|`.*SELECT.*\$\{",
-    re.I,
-)
-RE_SHELL_CONCAT = re.compile(
-    r"\b(subprocess\.(call|run|Popen|check_output|check_call)\s*\(\s*[\"'][^\"']*[\"']\s*\+|os\.system\s*\(\s*\w+.*\+|exec\s*\(\s*[\"'][^\"']*\+|spawn\s*\(\s*[\"']),",
-    re.I,
-)
-RE_DANGEROUS_SHELL = re.compile(
-    r"\b(shell\s*=\s*True|shell:\s*true)\b", re.I
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity="critical", file=source_path,
-                        line=line, message=msg, fix=fix, dimension="injection")
-    for lineno, raw in code_lines(code):
-        if "import " in raw or "from " in raw:
-            continue
-        line = raw
-        if RE_SQL_CONCAT_PY.search(line) or RE_SQL_FSTRING_ASSIGN.match(line):
-            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
-                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
-        if RE_SQL_CONCAT_JS.search(line):
-            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
-                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
-        if RE_SHELL_CONCAT.search(line):
-            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
-                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
-        if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
-第 41 页 共 60 页
-cursor-scan V1.0
-
-            findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
-                                "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))
-    return findings
-# ----- 文件: rules/permissions.py (28 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_CHMOD_0777 = re.compile(
-)
-RE_MKDIR_WORLD = re.compile(
-)
-RE_TMP_WRITE = re.compile(
-    r"\bopen\s*\(\s*[\"']/tmp/[^)\"']*",
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str) -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity="high", file=source_path,
-                        line=line, message=msg, fix=fix, dimension="permissions")
-    for lineno, raw in code_lines(code):
-        if RE_CHMOD_0777.search(raw):
-            findings.append(hit(lineno, "perms.chmod_world_writable", "世界可写 chmod",
-                                "设置文件/目录为 0777 或 0666，任何用户可写", "改为 0o600/0o700"))
-        if RE_MKDIR_WORLD.search(raw):
-            findings.append(hit(lineno, "perms.world_writable_dir", "世界可写目录",
-                                "以 0777 创建目录", "使用 0o700 (私有目录)"))
-        if RE_TMP_WRITE.search(raw):
-            findings.append(hit(lineno, "perms.tmp_write_insecure", "不安全 /tmp 写入",
-                                "直接写 /tmp 易受符号链接攻击 (symlink attack)", "使用 tempfile.mkstemp 私有文件"))
-    return findings
-# ----- 文件: rules/secrets.py (80 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_AWS_AKEY = re.compile(r"\b(AKIA|ASIA|ABCDEFGHIJKLMNOPQRSTUVWXYZ)[A-Z0-9]{16,20}\b")
-RE_AWS_SKEY = re.compile(r"\b[A-Za-z0-9/+=]{40}\b")  # too noisy; keep as helper only
-RE_SLACK_TOKEN = re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")
-RE_GITHUB_TOKEN = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b")
-RE_GOOGLE_API = re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b")
-RE_JWT_GENERIC = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.([A-Za-z0-9_-]{8,})?")
-RE_STRIPE = re.compile(r"\b(sk_live_[0-9A-Za-z]{20,}|rk_live_[0-9A-Za-z]{20,})\b")
-RE_PEM_PRIVATE = re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")
-RE_OP_SSH = re.compile(r"-----BEGIN OPENSSH PRIVATE KEY-----")
-RE_GENERIC_KEY = re.compile(
-)
-STRONG_HINT_KEYS = re.compile(
-第 42 页 共 60 页
-cursor-scan V1.0
-
-    r"credential|auth|pem|salt|key)(?:_|$)",
-    re.I,
-)
-LOW_ENTROPY = re.compile(
-    r"""^["'"?]+$|^[0-9]{1,6}$|^(true|false|null|none|xxx|changeme|change_me|example|test|default)$|^[x*]{4,}$""",
-    re.I,
-)
-PLACEHOLDER_VALUES = re.compile(
-    r"^(your|my|example|sample|demo|replace|test|dummy|fake|changeme|change-me|local|prod|staging|dev|default|foo|bar|\.\.\.|xxxxx+)\w*$|^\{\{\w+\}\}$|^env\(.+\)$|^process\.env\..+$|^os\.environ\.get\(.+\)$|\$",
-    re.I,
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str, sev: str = "critical") -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity=sev, file=source_path,
-                        line=line, message=msg, fix=fix, dimension="secrets")
-    if RE_PEM_PRIVATE.search(code) or RE_OP_SSH.search(code):
-        for lineno, raw in enumerate(code.splitlines(), start=1):
-            if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
-                findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
-                                    "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
-    for lineno, raw in code_lines(code):
-        stripped = raw.strip()
-        if stripped.startswith("#"):
-            continue
-        if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
-            continue
-        if RE_PEM_PRIVATE.search(raw) or RE_OP_SSH.search(raw):
-            findings.append(hit(lineno, "secrets.private_key", "硬编码私钥",
-                                "源码中发现 PEM/OpenSSH 私钥块", "移除私钥，移动到密钥管理 (如环境变量 / KMS)"))
-            continue
-        if RE_STRIPE.search(raw):
-            findings.append(hit(lineno, "secrets.stripe_key", "硬编码 Stripe 密钥",
-                                "检测到 live Stripe key", "使用环境变量 / 密钥管理"))
-            continue
-        if RE_GITHUB_TOKEN.search(raw):
-            findings.append(hit(lineno, "secrets.github_token", "硬编码 GitHub Token",
-                                "检测到 GitHub token", "改用环境变量，撤销泄露 token"))
-            continue
-        if RE_SLACK_TOKEN.search(raw):
-            findings.append(hit(lineno, "secrets.slack_token", "硬编码 Slack Token",
-                                "检测到 Slack bot token", "使用环境变量"))
-            continue
-        if RE_GOOGLE_API.search(raw):
-            findings.append(hit(lineno, "secrets.google_api_key", "硬编码 Google API Key",
-                                "检测到 Google API key", "使用环境变量 / Google Secret Manager"))
-            continue
-        if RE_AWS_AKEY.search(raw):
-            findings.append(hit(lineno, "secrets.aws_access_key", "硬编码 AWS 访问密钥 ID",
-                                "检测到 AWS Access Key ID", "移除，使用 IAM 角色 / AWS Secrets Manager"))
-第 43 页 共 60 页
-cursor-scan V1.0
-
-        m = RE_GENERIC_KEY.match(raw)
-        if m:
-            key, val = m.group("key"), m.group("val")
-            if STRONG_HINT_KEYS.search(key):
-                cleaned = val.strip("'\"")
-                if LOW_ENTROPY.match(cleaned) or PLACEHOLDER_VALUES.search(cleaned):
-                    continue
-                if len(cleaned) < 10:
-                    continue
-                findings.append(hit(lineno, "secrets.hardcoded_key", "硬编码密钥/口令",
-                                    f"变量 {key} 被赋为硬编码值", "改为从环境变量 / 密钥管理读取",
-                                    sev="high"))
-    return findings
-# ----- 文件: rules/xss.py (59 行) -----
-from __future__ import annotations
-import re
-from typing import List
-from ..models import Evidence
-from .helpers import code_lines
-RE_DOM_SINK = re.compile(
-    r"\b\.(?:innerHTML|insertAdjacentHTML|outerHTML)\b\s*[=(.]",
-    re.I,
-)
-RE_DANGEROUS_REACT = re.compile(
-    r"\bdangerouslySetInnerHTML\b",
-    re.I,
-)
-RE_DOCUMENT_WRITE = re.compile(
-    r"""\bdocument\.write(?:ln)?\s*\(\s*(?!["'`](?:[^"'`\\]|\\.)*["'`]\s*\))""",
-    re.I,
-)
-RE_DOC_TEMPLATE_INTERP = re.compile(
-    r"""\bdocument\.write(?:ln)?\s*\(\s*`[^`]*\$\{""",
-)
-RE_TEMPLATE_RENDER = re.compile(
-    r"\b(render_template_string|flask\.Markup|markupsafe\.Markup|\bMarkup)\s*\(",
-)
-RE_AUTOESCAPE_OFF = re.compile(
-    r"(\{%\s*autoescape\s+(false|off)\s*%\}|\|\s*safe\b)",
-)
-def analyze_code(source_path: str, code: str) -> List[Evidence]:
-    findings: List[Evidence] = []
-    def hit(line: int, rule_id: str, title: str, msg: str, fix: str,
-            severity: str = "medium") -> Evidence:
-        return Evidence(rule_id=rule_id, title=title, severity=severity,
-                        file=source_path, line=line, message=msg, fix=fix,
-                        dimension="xss")
-    for lineno, raw in code_lines(code):
-        if "import " in raw or "from " in raw:
-            continue
-第 44 页 共 60 页
-cursor-scan V1.0
-
-        line = raw
-        if RE_DOM_SINK.search(line):
-            findings.append(hit(lineno, "xss.dom_manipulation", "DOM HTML 注入",
-                                "用户输入可触发 XSS",
-                                "改用 textContent / innerText，或先做 HTML 转义"))
-        if RE_DANGEROUS_REACT.search(line):
-            findings.append(hit(lineno, "xss.dangerous_react", "React 危险 HTML",
-                                "dangerouslySetInnerHTML 直接渲染原始 HTML",
-                                "使用 React 子节点或先转义 __html 内容"))
-        if RE_DOCUMENT_WRITE.search(line) or RE_DOC_TEMPLATE_INTERP.search(line):
-            findings.append(hit(lineno, "xss.document_write", "document.write",
-                                "document.write 写入非字面量内容",
-                                "改用 DOM API (textContent / createElement)"))
-        if RE_TEMPLATE_RENDER.search(line):
-            findings.append(hit(lineno, "xss.template_render", "模板渲染未转义",
-                                "render_template_string / Markup 未转义地渲染用户输入",
-                                "启用自动转义并使用 render_template，避免 Markup 包裹用户输入",
-                                severity="high"))
-        if RE_AUTOESCAPE_OFF.search(line):
-            findings.append(hit(lineno, "xss.template_render", "关闭模板转义",
-                                "Jinja 自动转义被关闭或将变量标记为 safe",
-                                "保持 autoescape 开启，移除 |safe 过滤器"))
-    return findings
-# ----- 文件: scan.py (207 行) -----
-from __future__ import annotations
-import json
-import os
-import re
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
-from .ignore import IgnorePattern, compile_ignores
-from .models import Evidence, ScanResult, Scorecard
-from .rules import (access_control, crypto, deps, deserialization, injection,
-                    permissions, secrets, xss)
-from .scanners import ast as ast_scanners
-SKIP_DIRS = {
-    ".git", ".hg", ".svn", ".bzr",
-    "node_modules", "bower_components",
-    ".venv", "venv", "env", "virtualenv",
-    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    ".next", ".nuxt", "dist", "build", ".cache", ".tox", ".eggs",
-    ".future-code", ".idea", ".vscode",
-}
-SKIP_EXTS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".svg",
-    ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".zip", ".tar", ".gz",
-    ".xz", ".bz2", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib", ".o", ".a",
-    ".pyc", ".pyo", ".class", ".jar", ".lock", ".min.js", ".map",
-第 45 页 共 60 页
-cursor-scan V1.0
-
-}
-_BINARY_RE = re.compile(rb"[\x00\x01\x02]")
-TEXT_EXTS = {
-    ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
-    ".rb", ".php", ".go", ".rs", ".java", ".kt", ".sh", ".bash", ".zsh", ".pl",
-    ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".sql", ".vue",
-    ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
-    ".tf", ".cfg", ".conf",
-}
-ALWAYS_TEXT = {
-    "Dockerfile", "docker-compose.yml", "docker-compose.yaml", "Makefile",
-    "requirements.txt", "package.json", "package-lock.json", "Pipfile",
-    "Pipfile.lock", ".env", ".npmrc", ".pypirc", "Gemfile", "Gemfile.lock",
-    "composer.json", "go.mod", "go.sum", "Cargo.toml", "setup.py", "pyproject.toml",
-    "Procfile", ".gitlab-ci.yml", ".github", ".dockerignore", "README.md",
-}
-CONFIG_NAME = ".cursor-scan.json"
-@dataclass
-class ScanOptions:
-    max_bytes: int = 2 * 1024 * 1024  # skip files larger than 2 MB
-    follow_symlinks: bool = False
-    ignore_patterns: List[IgnorePattern] = field(default_factory=list)
-def _is_binary(data: bytes) -> bool:
-    head = data[:8192]
-    return bool(_BINARY_RE.search(head)) or b"\x00" in head
-def _read_text(path: str, max_bytes: int) -> Tuple[str, Optional[str]]:
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return "", "unreadable"
-    if stat.st_size > max_bytes:
-        return "", "too_large"
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    except OSError:
-        return "", "unreadable"
-    if _is_binary(data):
-        return "", "binary"
-    try:
-        return data.decode("utf-8", errors="strict"), None
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace"), "encoding"
 def _iter_source_files(root: str, opts: ScanOptions) -> Iterable[str]:
+    """Yield relative paths of files worth scanning, in stable order."""
     root = os.path.abspath(root)
     for dirpath, dirnames, filenames in os.walk(root, followlinks=opts.follow_symlinks):
         dirnames[:] = sorted(
             d for d in dirnames
             if d not in SKIP_DIRS and not d.startswith(".")
         )
-第 46 页 共 60 页
-cursor-scan V1.0
-
         for name in sorted(filenames):
             if name == CONFIG_NAME:
                 continue  # the tool's own config is never scanned
@@ -2457,9 +1616,12 @@ cursor-scan V1.0
                 continue
             if low in ALWAYS_TEXT or ext in TEXT_EXTS:
                 yield rel
+
+
 def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
     if not src:
         return
+
     lang = ast_scanners.lang_for_file(rel)
     if lang == "python":
         try:
@@ -2471,13 +1633,23 @@ def _scan_file(root: str, rel: str, src: str, findings: List[Evidence]) -> None:
             ast_scanners.analyze_jsts(path_of(root, rel), src, findings)
         except Exception as exc:
             findings.append(_internal_error(path_of(root, rel), exc))
+
+    # Regex fallback + secret rules apply to every text file; dependency-
+    # manifest rules (requirements*.txt / package.json) are per-file too.
     for runner in (crypto, injection, deserialization, permissions):
         findings.extend(runner.analyze_code(path_of(root, rel), src))
     findings.extend(secrets.analyze_code(path_of(root, rel), src))
     findings.extend(deps.analyze_code(path_of(root, rel), src))
     findings.extend(xss.analyze_code(path_of(root, rel), src))
+
+
 def path_of(root: str, rel: str) -> str:
     return os.path.join(root, rel)
+
+
+第 31 页 共 60 页
+cursor-scan V1.0
+
 def _internal_error(path: str, exc: Exception) -> Evidence:
     return Evidence(
         rule_id="internal.scan_error",
@@ -2489,7 +1661,14 @@ def _internal_error(path: str, exc: Exception) -> Evidence:
         fix="检查文件语法",
         dimension="injection",
     )
+
+
 def _load_config(target: str) -> List[IgnorePattern]:
+    """Load ``.cursor-scan.json`` from the target; return ignore patterns.
+
+    A missing or malformed config is ignored (a warning would spam every scan
+    on projects that never heard of this file).
+    """
     cfg = os.path.join(target, CONFIG_NAME)
     if not os.path.isfile(cfg):
         return []
@@ -2497,15 +1676,15 @@ def _load_config(target: str) -> List[IgnorePattern]:
         with open(cfg, "r", encoding="utf-8") as fh:
             doc = json.load(fh)
     except (OSError, ValueError):
-第 47 页 共 60 页
-cursor-scan V1.0
-
         return []
     specs = doc.get("ignore", []) if isinstance(doc, dict) else []
     if not isinstance(specs, list):
         return []
     return compile_ignores([s for s in specs if isinstance(s, str)])
+
+
 def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResult:
+    """Scan a project directory and return the aggregate result."""
     options = options or ScanOptions()
     target = os.path.abspath(target)
     started = time.monotonic()
@@ -2513,11 +1692,20 @@ def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResu
         target=target,
         started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+
     if not os.path.isdir(target):
         raise NotADirectoryError(f"扫描目标不存在或不是目录: {target}")
+
+    # CLI --ignore patterns are combined with any in the config file, so both
+    # sources are always honoured.
     patterns = list(options.ignore_patterns) + _load_config(target)
+
+第 32 页 共 60 页
+cursor-scan V1.0
+
     rels = sorted(_iter_source_files(target, options))
     file_texts: Dict[str, List[Tuple[int, str]]] = {}
+
     for rel in rels:
         path = os.path.join(target, rel)
         src, _ = _read_text(path, options.max_bytes)
@@ -2527,14 +1715,26 @@ def scan_project(target: str, options: Optional[ScanOptions] = None) -> ScanResu
         result.scanned_files += 1
         _scan_file(target, rel, src, result.findings)
         file_texts[rel] = list(enumerate(src.splitlines(), start=1))
+
+    # Project-level rules (needs the whole tree's text).
     access_control.analyze_project(file_texts, result.findings)
+
     result.duration_sec = round(time.monotonic() - started, 3)
     _finalize(result, patterns, target)
     _backfill_snippets(result, file_texts, target)
     return result
+
+
 def _backfill_snippets(result: ScanResult,
                        file_texts: Dict[str, List[Tuple[int, str]]],
                        target: str) -> None:
+    """Resolve the offending source line for every finding.
+
+    Rules report file/line only; the exact code fragment is filled in here so
+    JSON / SARIF output and the web dashboard all carry the same snippet.
+    ``access_control`` findings reference files by relative path while per-file
+    rules use the absolute path, so both keys are indexed.
+    """
     by_path: Dict[str, List[Tuple[int, str]]] = dict(file_texts)
     for rel, lines in file_texts.items():
         by_path[os.path.join(target, rel)] = lines
@@ -2549,14 +1749,19 @@ def _backfill_snippets(result: ScanResult,
                 lines = None
         if lines and 0 < f.line <= len(lines):
             f.code_snippet = lines[f.line - 1][1].strip()
+
+
 def _finalize(result: ScanResult, patterns: List[IgnorePattern] = (),
-第 48 页 共 60 页
+              target: str = "") -> None:
+第 33 页 共 60 页
 cursor-scan V1.0
 
-              target: str = "") -> None:
+    """Deduplicate findings, split out suppressed ones, then score the rest."""
     seen: set = set()
     unique: List[Evidence] = []
     for f in result.findings:
+        # Deduplicate per rule/file/line so AST + regex rules reporting the
+        # same issue on one line collapse to a single finding.
         key = (f.rule_id, f.file, f.line)
         if key in seen:
             continue
@@ -2564,6 +1769,7 @@ cursor-scan V1.0
         unique.append(f)
     unique.sort(key=lambda f: (f.file, f.line, f.rule_id))
     result.findings = unique
+
     suppressed: List[Evidence] = []
     if patterns:
         target_abs = os.path.abspath(target)
@@ -2579,19 +1785,40 @@ cursor-scan V1.0
                 kept.append(f)
         result.findings = kept
         result.suppressed = suppressed
+
     counts: Dict[str, int] = {}
     for f in result.findings:
         counts[f.severity] = counts.get(f.severity, 0) + 1
     result.summary = counts
+
     Scorecard.from_result(result)
-# ----- 文件: scanners/ast.py (287 行) -----
+# ----- 文件: scanners/__init__.py (0 行) -----
+"""Scanner package."""
+# ----- 文件: scanners/ast.py (484 行) -----
+"""AST scanners for Python and JS/TS built on tree-sitter.
+
+Each scanner visits the parsed tree and emits Evidence objects. The scanners
+operate on source text plus a few tree-sitter node helpers; where an AST-based
+check is ambiguous (e.g. fixed IV, ECB) we fall back to line-oriented regex.
+"""
+
 from __future__ import annotations
+
+import re
+
+第 34 页 共 60 页
+cursor-scan V1.0
+
 import tree_sitter_javascript
 import tree_sitter_python
 import tree_sitter_typescript
 from tree_sitter import Language, Parser
+
 from ..models import Evidence
+
 _LANG_CACHE: dict = {}
+
+
 def _language(name: str):
     if name not in _LANG_CACHE:
         if name == "python":
@@ -2602,10 +1829,9 @@ def _language(name: str):
             lang = Language(tree_sitter_typescript.language_typescript())
         _LANG_CACHE[name] = lang
     return _LANG_CACHE[name]
-_PARSER_CACHE: dict = {}
-第 49 页 共 60 页
-cursor-scan V1.0
 
+
+_PARSER_CACHE: dict = {}
 _ext_to_lang = {
     ".py": "python",
     ".pyi": "python",
@@ -2618,6 +1844,8 @@ _ext_to_lang = {
     ".mts": "typescript",
     ".cts": "typescript",
 }
+
+
 def lang_for_file(path: str):
     import os
     low = path.lower()
@@ -2625,44 +1853,111 @@ def lang_for_file(path: str):
         if low.endswith(ext):
             return lang
     return None
+
+
 def _parser(lang: str) -> Parser:
     if lang not in _PARSER_CACHE:
         _PARSER_CACHE[lang] = Parser(_language(lang))
     return _PARSER_CACHE[lang]
+第 35 页 共 60 页
+cursor-scan V1.0
+
+
+
 def parse(source: str, lang: str):
     return _parser(lang).parse(source.encode("utf-8", errors="surrogatepass"))
+
+
 def collect_calls(root, src: str):
+    """Yield (call_node) for every call node in the tree.
+
+    Python grammar names calls ``call``; the JS/TS grammars use
+    ``call_expression``.
+    """
     stack = [root]
     while stack:
         node = stack.pop()
         if node.type in ("call", "call_expression"):
             yield node
         stack.extend(node.children)
-def call_fn_name(node, src: str) -> str:
+
+
+def collect_new_expressions(root):
+    """Yield every ``new_expression`` node (JS ``new Foo(...)``).
+
+    tree-sitter models ``new Function(body)`` as a ``new_expression`` with a
+    ``constructor`` field, never as a ``call_expression``, so ``collect_calls``
+    cannot see it -- ``Function`` is the constructor-equivalent of ``eval`` and
+    must be inspected on its own pass.
+    """
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "new_expression":
+            yield node
+        stack.extend(node.children)
+
+
+def _bstr(bsrc: bytes, start: int, end: int) -> str:
+    """Slice a node's source span and decode back to text.
+
+    tree-sitter parses ``source.encode("utf-8")``, so ``start_byte`` /
+    ``end_byte`` are UTF-8 byte offsets into the encoded source.  Slicing the
+    original ``str`` with those offsets corrupts every span after the first
+    non-ASCII character, so spans are taken from the encoded bytes and decoded.
+    """
+    return bsrc[start:end].decode("utf-8", errors="surrogatepass")
+
+
+def new_expression_name(node, bsrc: bytes) -> str:
+    """Textual constructor name of a ``new_expression``, e.g. ``Function``."""
+    ctor = node.child_by_field_name("constructor")
+第 36 页 共 60 页
+cursor-scan V1.0
+
+    if ctor is None:
+        return ""
+    return _bstr(bsrc, ctor.start_byte, ctor.end_byte)
+
+
+def call_fn_name(node, bsrc: bytes) -> str:
+    """Return textual form of call function, e.g. 'hashlib.md5', 'yaml.load'."""
     fn = node.child_by_field_name("function")
     if fn is None:
         return ""
-    return src[fn.start_byte:fn.end_byte]
-def args_text(node, src: str) -> str:
+    return _bstr(bsrc, fn.start_byte, fn.end_byte)
+
+
+def args_text(node, bsrc: bytes) -> str:
     args = node.child_by_field_name("arguments")
     if args is None:
         return ""
-    return src[args.start_byte:args.end_byte]
+    return _bstr(bsrc, args.start_byte, args.end_byte)
+
+
 def _line_for(node) -> int:
     return node.start_point[0] + 1
+
+
 def _ev(rule_id, title, sev, path, line, msg, fix, dimension):
     return Evidence(rule_id=rule_id, title=title, severity=sev, file=path, line=line,
                     message=msg, fix=fix, dimension=dimension)
+
+
+# --------------------------------------------------------------------------
+# Python AST analysis
+# --------------------------------------------------------------------------
+
 def analyze_python(path, src, findings):
     tree = parse(src, "python")
     root = tree.root_node
-第 50 页 共 60 页
-cursor-scan V1.0
-
+    bsrc = src.encode("utf-8", errors="surrogatepass")
     for call in collect_calls(root, src):
-        fn = call_fn_name(call, src)
-        args = args_text(call, src)
+        fn = call_fn_name(call, bsrc)
+        args = args_text(call, bsrc)
         line = _line_for(call)
+
+        # ----- weak crypto -----
         if fn in ("hashlib.md5", "hashlib.sha1", "md5", "sha1",
                   "hashlib.new", "cryptography.hazmat.primitives.hashes.MD5",
                   "cryptography.hazmat.primitives.hashes.SHA1"):
@@ -2670,8 +1965,12 @@ cursor-scan V1.0
                 if any(q in args for q in ('"md5"', "'md5'", '"sha1"', "'sha1'")):
                     findings.append(_ev(
                         "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+第 37 页 共 60 页
+cursor-scan V1.0
+
                         f"hashlib.new 调用弱哈希 {args}", "改用 sha256", "crypto"))
             elif fn == "md5" or fn == "sha1":
+                # bare md5()/sha1() is fine only if definition; but this is a call so flag
                 findings.append(_ev(
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "medium", path, line,
                     f"调用 md5/sha1: {fn}()", "改用 sha256", "crypto"))
@@ -2679,6 +1978,32 @@ cursor-scan V1.0
                 findings.append(_ev(
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
                     f"调用弱哈希 {fn}", "改用 sha256 (hashlib.sha256)", "crypto"))
+        if fn in ("hmac.new", "hmac.HMAC"):
+            digest = None
+            kw = _find_kw_literal(call, bsrc, ("digestmod",))
+            if kw is not None:
+                digest = _py_static_string(kw[0])  # digestmod="md5"
+            else:
+                pos = _py_positional_args(call, bsrc)
+                if len(pos) >= 3:
+                    digest = _py_static_string(pos[2])  # hmac.new(key, msg, "md5")
+            if digest is not None and digest.lower() in ("md5", "sha1"):
+                findings.append(_ev(
+                    "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                    f"HMAC 使用弱摘要 {digest}: {fn}({args})", "改用 sha256 摘要", "crypto"))
+
+        # weak KDF: too few PBKDF2 iterations (< 100k) makes brute forcing
+        # cheap.  hashlib.pbkdf2_hmac(hash, password, salt, iterations, ...):
+        # iterations is the fourth positional argument.
+        if fn == "hashlib.pbkdf2_hmac":
+            pos = _py_positional_args(call, bsrc)
+            if len(pos) >= 4 and _py_static_int(pos[3]) is not None \
+                    and _py_static_int(pos[3]) < 100000:
+                findings.append(_ev(
+                    "crypto.weak_kdf", "弱密钥派生 (KDF 迭代过少)", "medium", path, line,
+                    f"PBKDF2 迭代次数过少: {pos[3].strip()}", "使用 >= 100000 次迭代 (如 310000)", "crypto"))
+
+        # ------ weak cipher / mode ------
         if fn in ("AES.new", "AES", "DES.new", "DES3.new", "DES", "TripleDES.new",
                   "Crypto.Cipher.DES.new", "Crypto.Cipher.DES3.new",
                   "cryptography.hazmat.primitives.ciphers.algorithms"):
@@ -2690,29 +2015,65 @@ cursor-scan V1.0
                 findings.append(_ev(
                     "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
                     f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
-            m = _find_kw_literal(call, src, ("iv", "nonce"))
-            if m:
+            # fixed IV with a literal value only: ``iv=iv`` / ``nonce=nonce``
+            # pass a runtime variable, so only static constants prove the IV is
+            # fixed across runs.
+第 38 页 共 60 页
+cursor-scan V1.0
+
+            m = _find_kw_literal(call, bsrc, ("iv", "nonce"))
+            if m and _py_static_value(m[0]) is not None:
                 findings.append(_ev(
                     "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
                     f"加密调用 {fn} 使用固定 IV {m[2]}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
+            # positional form: AES.new(key, mode, iv) -- the dedicated
+            # positional IV argument, e.g. AES.new(key, AES.MODE_CBC, b'...').
+            pos = _py_positional_args(call, bsrc)
+            if len(pos) >= 3 and _py_static_value(pos[2]) is not None:
+                findings.append(_ev(
+                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
+                    f"加密调用 {fn} 使用固定 IV {pos[2].strip()}", "每次加密生成随机 IV 并通过参数传递", "crypto"))
         if fn.endswith(".new") and ("MODE.ECB" in args or "CipherMode.ECB" in args):
             findings.append(_ev(
                 "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
                 f"{fn} 使用 ECB 模式", "改用 GCM/CBC + 随机 IV", "crypto"))
+
+        # ------ hardcoded random seed ------
         if fn in ("random.seed", "np.random.seed", "numpy.random.seed",
                   "torch.manual_seed", "torch.random.manual_seed", "random.seedfn"):
-            seed_val = _arg_literal(call, src)
+            seed_val = _arg_literal(call, bsrc)
             if seed_val is not None and _is_literal_scalar(seed_val):
                 findings.append(_ev(
                     "crypto.hardcoded_seed", "硬编码随机种子", "medium", path, line,
                     f"随机种子被硬编码为 {seed_val}", "改为随机种子 (os.urandom) 或可配置", "crypto"))
-        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads"):
+
+        # ------ unsafe deserialization ------
+        if fn in ("pickle.load", "pickle.loads", "cPickle.load", "cPickle.loads",
+                  "_pickle.load", "_pickle.loads"):
             findings.append(_ev(
                 "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
-第 51 页 共 60 页
+                f"pickle 反序列化 {args}", "改用 JSON / 安全序列化格式", "deserialization"))
+
+        # pickle-backed loaders from the ML/data stack execute arbitrary code
+        # on load (numpy.load only when allow_pickle=True; torch.load is gated
+        # by its weights_only=False default), reusing the deser.pickle rule.
+        if fn in ("joblib.load", "pandas.read_pickle", "pd.read_pickle"):
+            findings.append(_ev(
+                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                f"{fn} 底层 pickle 反序列化 {args}", "改用安全序列化格式", "deserialization"))
+        if fn in ("numpy.load", "np.load") and "allow_pickle=True" in args:
+            findings.append(_ev(
+                "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                f"np.load 开启 allow_pickle 可执行任意代码", "关闭 allow_pickle 或改用 np.savez", "deserialization"))
+        if fn == "torch.load":
+            if not _torch_safe(args):
+                findings.append(_ev(
+                    "deser.pickle", "不安全反序列化 (pickle)", "critical", path, line,
+                    f"torch.load 默认 pickle 反序列化 {args}", "使用 weights_only=True 或改用安全格式", "deserialization"))
+
+第 39 页 共 60 页
 cursor-scan V1.0
 
-                f"pickle 反序列化 {args}", "改用 JSON / 安全序列化格式", "deserialization"))
         if fn in ("yaml.load", "yaml.full_load_all", "yaml.load_all"):
             if not _yaml_safe(fn, call, src, args):
                 findings.append(_ev(
@@ -2722,69 +2083,161 @@ cursor-scan V1.0
             findings.append(_ev(
                 "deser.yaml_load", "不安全 yaml.load", "critical", path, line,
                 "显式调用 yaml.unsafe_load", "改用 yaml.safe_load", "deserialization"))
+
         if fn == "eval" or fn.endswith("(eval") or fn in ("exec", "compile"):
             if _has_external_input(call, src, args):
                 findings.append(_ev(
                     "deser.eval", "eval/exec 外部输入", "critical", path, line,
                     f"{fn} 接收外部输入: {args}", "重构，不使用 eval/exec 解析数据", "deserialization"))
-        if fn.endswith(".execute") or fn in ("cursor.execute", "db.execute", "conn.execute",
-                                              "execute", "executemany", "cursor3.execute",
-                                              "mysql.cursor.execute"):
+
+        # ------ injection ------
+        if fn.endswith((".execute", ".executemany", ".executescript",
+                        ".fetchval", ".fetchrow", ".fetchmany", ".fetch")) \
+                or fn in ("cursor.execute", "db.execute", "conn.execute",
+                          "execute", "executemany", "cursor3.execute",
+                          "mysql.cursor.execute", "text"):
             if _contains_sql(args) and _has_concat(args):
                 findings.append(_ev(
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
                     f"SQL 通过字符串拼接: {args}", "使用参数化查询 (?, %s)", "injection"))
-        if fn in ("os.system",) or fn.startswith("subprocess."):
+        if fn in ("os.system", "os.popen") or fn.startswith("subprocess."):
+            # Which slot the concat lands in decides whether a shell is
+            # involved: an explicit shell=True always interprets its command
+            # through a shell, and a *string* command (os.system / os.popen /
+            # subprocess with a single string argument) is parsed by a shell
+            # too.  `sh -c`/`bash -c` handed as the argv list also reaches a
+            # shell.  But a concat buried in the *argv list* of a shell-less
+            # subprocess call is passed as separate arguments (no metachar
+            # expansion), so it must not fire shell injection -- only
+            # shell-involved or concat-built command strings.
             if "shell=True" in args or "shell = True" in args:
                 if _has_concat(args):
                     findings.append(_ev(
                         "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                         f"subprocess 开放 shell 且拼接命令: {args}", "传入参数列表, 关闭 shell", "injection"))
-            if _has_concat(args) and fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
-                                            "subprocess.check_output", "subprocess.check_call",
-                                            "os.system"):
-                findings.append(_ev(
-                    "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
-                    f"命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
+            elif _SHELL_EQ_FALSE.search(args):
+                # Explicit shell=False: the shell is disabled, so a concat
+                # command string is not interpreted by a shell.
+                pass
+            elif fn in ("subprocess.call", "subprocess.run", "subprocess.Popen",
+                        "subprocess.check_output", "subprocess.check_call",
+                        "os.system", "os.popen"):
+                first = _first_positional(call, bsrc)
+                cmd = first[0] if first is not None else ""
+第 40 页 共 60 页
+cursor-scan V1.0
+
+                arg_list = _first_arg_is_list(call, bsrc)
+                if not arg_list and _has_concat(cmd):
+                    findings.append(_ev(
+                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                        f"命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
+                elif arg_list and _SHELL_BIN.search(cmd) is not None \
+                        and _SHELL_DASH_C.search(args) is not None \
+                        and _has_concat(args):
+                    # argv list ``["sh", "-c", "ls " + d]`` -- the command
+                    # line is built by concat and then shell-interpreted.
+                    findings.append(_ev(
+                        "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
+                        f"sh -c 命令由字符串拼接构造: {args}", "使用参数列表", "injection"))
+
+        # ------ permissions ------
         if fn == "os.chmod" or "chmod" in fn:
-            mode = _last_arg(call, src)
+            mode = _last_arg(call, bsrc)
             if _is_0777(mode) or _is_0666(mode):
                 findings.append(_ev(
                     "perms.chmod_world_writable", "世界可写 chmod", "high", path, line,
                     f"os.chmod 权限 {mode} 世界可写", "使用 0o600/0o700", "permissions"))
         if "makedirs" in fn or fn == "os.makedirs" or fn == "mkdir" or fn == "os.mkdir":
-            mode = _last_arg(call, src)
+            mode = _last_arg(call, bsrc)
             if _is_0777(mode):
                 findings.append(_ev(
                     "perms.world_writable_dir", "世界可写目录", "high", path, line,
                     f"目录创建权限 {mode} 世界可写", "使用 0o700", "permissions"))
-def _find_kw_literal(call, src, names):
+
+
+_PY_STATIC_STRING = re.compile(r'^([bfrBF]{0,2})(["\'])(.*?)\2$', re.S)
+
+
+def _py_static_string(txt: str) -> str | None:
+    """Value of a static quoted Python string literal; ``None`` otherwise.
+
+    Identifiers, attribute access (``hashlib.md5``), prefixed strings
+    (``f"..."``, ``b"..."``) and concatenations are treated as None, either
+    because they are unverifiable statically (dynamic f-strings / bytes hold
+    runtime bytes) or because they are handled by the regex fallback.  Callers
+    that need raw bytes/pickle literals (a fixed IV is a raw byte constant)
+    pass ``allow_prefix=True``.
+    """
+    m = _PY_STATIC_STRING.match(txt.strip())
+    if not m:
+        return None
+    if m.group(1):
+        return None
+    return m.group(3)
+
+
+第 41 页 共 60 页
+cursor-scan V1.0
+
+def _py_static_value(txt: str) -> str | None:
+    """Value of a static string literal, allowing bytes/raw prefix.
+
+    Unlike ``_py_static_string``, accepts ``b'...'`` (and other byte prefixes)
+    and returns the decoded literal value, so raw IV constants compare as
+    ``b'0123456789abcdef'``.  f-strings (any prefix carrying ``f``) are
+    rejected: their ``{...}`` interpolation makes them dynamic.
+    """
+    m = _PY_STATIC_STRING.match(txt.strip())
+    if not m:
+        return None
+    if "f" in m.group(1).lower():
+        return None
+    return m.group(3)
+
+
+def _py_positional_args(call, bsrc):
+    """Source texts of the positional (non-keyword) named arguments."""
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return []
+    return [_bstr(bsrc, a.start_byte, a.end_byte)
+            for a in args.named_children
+            if a.type not in ("keyword_argument", "keyed_element", "list_splat", "dictionary_splat")]
+
+
+def _find_kw_literal(call, bsrc, names):
     args = call.child_by_field_name("arguments")
     if args is None:
         return None
-第 52 页 共 60 页
-cursor-scan V1.0
-
+    # keyword_argument children
     for a in args.named_children:
         if a.type in ("keyword_argument", "keyed_element"):
             kw = a.child_by_field_name("name")
             val = a.child_by_field_name("value")
             if kw is None or val is None:
                 continue
-            kwname = src[kw.start_byte:kw.end_byte]
+            kwname = _bstr(bsrc, kw.start_byte, kw.end_byte)
             if kwname in names:
-                vtxt = src[val.start_byte:val.end_byte]
+                vtxt = _bstr(bsrc, val.start_byte, val.end_byte)
                 return (vtxt, kw, val)
     return None
-def _arg_literal(call, src):
+
+
+def _arg_literal(call, bsrc):
     args = call.child_by_field_name("arguments")
     if args is None:
         return None
     named = args.named_children
     if not named:
+第 42 页 共 60 页
+cursor-scan V1.0
+
         return None
     first = named[0]
-    return src[first.start_byte:first.end_byte]
+    return _bstr(bsrc, first.start_byte, first.end_byte)
+
+
 def _is_literal_scalar(txt: str) -> bool:
     t = txt.strip()
     if not t:
@@ -2794,7 +2247,9 @@ def _is_literal_scalar(txt: str) -> bool:
     if t.startswith(("'", '"', "b'", 'b"')):
         return True
     return t.lstrip("-").isdigit()
-def _last_arg(call, src):
+
+
+def _last_arg(call, bsrc):
     args = call.child_by_field_name("arguments")
     if args is None:
         return ""
@@ -2802,77 +2257,247 @@ def _last_arg(call, src):
     if not named:
         return ""
     last = named[-1]
-    return src[last.start_byte:last.end_byte]
+    return _bstr(bsrc, last.start_byte, last.end_byte)
+
+
 def _is_0777(mode: str) -> bool:
     return mode.strip() in {"0o777", "0O777", "0o7777", "777", "0x1ff", "0o666", "0666", "0O666", "666"}
+
+
 def _is_0666(mode: str) -> bool:
     return mode.strip() in {"0o666", "0O666", "0666", "666"}
+
+
 def _yaml_safe(fn, call, src, args):
+    """True if a Loader=SafeLoader that's safe is present."""
     if "SafeLoader" in args or "FullLoader" not in args and "Loader=yaml." in args:
         return "SafeLoader" in args
     return False
+
+
+def _torch_safe(args: str) -> bool:
+    """True when a torch.load call is provably safe: a static
+    ``weights_only=True`` keyword.  torch.load historically defaults to the
+    unsafe pickle-backed weights_only=False, so an omitted or negative
+    weights_only is not forgivable; a dynamic value is unverifiable."""
+    m = re.search(r"\bweights_only\s*=\s*True\s*\b", args)
+    return m is not None
+
+第 43 页 共 60 页
+cursor-scan V1.0
+
+
 def _contains_sql(args: str) -> bool:
     return any(w in args.upper() for w in ("SELECT ", "INSERT ", "UPDATE ", "DELETE ", "DROP ", "CREATE ",
                                            "SELECT", "INSERT", "UPDATE", "DELETE"))
-def _has_concat(args: str) -> bool:
-第 53 页 共 60 页
-cursor-scan V1.0
 
-    return (" + " in args or "+" in args or "%s" in args and " % " in args)
+
+def _has_fstring_interp(args: str) -> bool:
+    """True if ``args`` contains a Python f-string with ``{...}`` interpolation.
+
+    Escaped literal braces (``{{ }}``) do not count as interpolation, so a
+    constant f-string is left alone.  The scan is line-narrowed to the f-string
+    body via ``re.S`` so embedded quotes/format specs inside the braces do not
+    cut the match short.
+    """
+    for m in re.finditer(r'f(["\'])(.*?)\1', args, re.S):
+        body = re.sub(r'\{\{.*?\}\}', "", m.group(2))
+        if "{" in body:
+            return True
+    return False
+
+
+def _has_concat(args: str) -> bool:
+    if " + " in args or "+" in args or "%s" in args and " % " in args:
+        return True
+    # F-string / template-literal interpolation is the most common SQL
+    # injection idiom in AI-generated code (e.g. ``execute(f"...{x}")``).
+    if _has_fstring_interp(args):
+        return True
+    # str.format() interpolation: ``"SELECT ... {} ...".format(uid)`` -- the
+    # format-spec braces plus a non-empty .format(...) argument list mark a
+    # dynamic interpolation, so an inert ``"".format()`` stays quiet.
+    if r".format(" in args and re.search(r"\.format\(\s*[^)\s]", args):
+        return True
+    if "`" in args and "${" in args:
+        return True
+    return False
+
+
 def _has_external_input(call, src, args) -> bool:
     ext = ("request.", "input(", "sys.argv", "os.environ", ".form[", ".json(", ".body",
            "req.", "ctx.", "kwargs", "data[", "params", "args[")
     low = args.lower()
     return any(x.lower() in low for x in ext)
+
+
+# --------------------------------------------------------------------------
+# JS / TS AST analysis
+# --------------------------------------------------------------------------
+
 def analyze_jsts(path, src, findings):
+第 44 页 共 60 页
+cursor-scan V1.0
+
     tree = parse(src, "typescript" if path.endswith((".ts", ".tsx", ".mts", ".cts")) else "javascript")
     root = tree.root_node
+    bsrc = src.encode("utf-8", errors="surrogatepass")
     for call in collect_calls(root, src):
-        fn = call_fn_name(call, src)
-        args = args_text(call, src)
+        fn = call_fn_name(call, bsrc)
+        args = args_text(call, bsrc)
         line = _line_for(call)
-        if fn.endswith(".createHash") or fn == "createHash":
-            if any(a in args for a in ("'md5'", '"md5"', "'sha1'", '"sha1"')):
+
+        # crypto.createHash('md5') / `sha1` / "md5" and createHmac (any
+        # quoted/backtick static first arg carrying the digest algorithm).
+        if (fn.endswith(".createHash") or fn == "createHash"
+                or fn.endswith(".createHmac") or fn == "createHmac"):
+            algo_match = _js_static_string_arg(args)
+            if algo_match is not None and algo_match.lower() in ("md5", "sha1"):
                 findings.append(_ev(
                     "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
                     f"使用 MD5/SHA1 哈希: {args}", "改用 sha256", "crypto"))
-            elif any(a in args for a in ("'sha256'", '"sha256"', "'sha512'", '"sha512"')):
-                pass
+
+        # Public JS weak-digest libraries carry the algorithm in the function
+        # name itself: CryptoJS.SHA1/MD5, forge md5/sha1, bare md5()/sha1()
+        # helpers. The regex fallback demands a `Crypto.Hash.` style prefix
+        # (CryptoJS is not matched) and is case-sensitive for `sha1`, so these
+        # would otherwise slip through.
+        if fn.endswith((".MD5", ".SHA1", ".md5", ".sha1")) or fn in ("md5", "sha1"):
+            findings.append(_ev(
+                "crypto.md5_or_sha1", "弱哈希算法 (MD5/SHA1)", "high", path, line,
+                f"使用弱哈希: {fn}()", "改用 sha256 (crypto.createHash)", "crypto"))
+
+        # node crypto cipher with ECB
         if "ECB" in args or "CipherMode.ECB" in args:
             findings.append(_ev(
                 "crypto.ecb_mode", "不安全加密模式 (ECB)", "high", path, line,
                 f"使用 ECB 加密模式: {fn}({args})", "改用 GCM", "crypto"))
+
+        # node crypto cipher: positional literal IV.  createCipheriv(alg, key,
+        # iv) / createDecipheriv(alg, key, iv) -- an IV that is a static string
+        # in source is fixed across runs.
+        if fn.endswith((".createCipheriv", ".createDecipheriv")) \
+                or fn in ("createCipheriv", "createDecipheriv"):
+            cargs = _js_positional_args(call, bsrc)
+            if len(cargs) >= 3 and _js_plain_string(cargs[2]) is not None:
+                findings.append(_ev(
+                    "crypto.fixed_iv", "固定 IV/nonce", "high", path, line,
+                    f"加密调用 {fn} 使用固定 IV {cargs[2].strip()}", "每次加密生成随机 IV (crypto.randomBytes)", "crypto"))
+
+        # weak KDF: too few PBKDF2 iterations (< 100k) makes brute forcing
+        # cheap. Both sync and async node crypto forms put iterations third;
+        # Python's hashlib.pbkdf2_hmac puts it fourth.
+        if fn.endswith(".pbkdf2Sync") or fn in ("pbkdf2Sync",):
+            cargs = _js_positional_args(call, bsrc)
+第 45 页 共 60 页
+cursor-scan V1.0
+
+            if len(cargs) >= 3 and _py_static_int(cargs[2]) is not None \
+                    and _py_static_int(cargs[2]) < 100000:
+                findings.append(_ev(
+                    "crypto.weak_kdf", "弱密钥派生 (KDF 迭代过少)", "medium", path, line,
+                    f"PBKDF2 迭代次数过少: {cargs[2].strip()}", "使用 >= 100000 次迭代 (如 310000)", "crypto"))
+        # DES usage in JS crypto
         if fn in ("des.createCipheriv", "des.createCipher") or "DES" in fn:
             findings.append(_ev(
                 "crypto.weak_cipher_des", "弱加密算法 (DES)", "high", path, line,
                 f"使用 DES 算法: {fn}", "改用 AES-GCM", "crypto"))
-        if fn in ("eval", "new Function"):
+
+        # hardcoded seed (Math.random / crypto not seedable in JS; skip)
+
+        # unsafe deserialization: eval( on external.  ``Function`` is the
+        # constructor twin of eval: ``new Function`` parses as a
+        # new_expression (handled on its own pass below), while a plain
+        # ``Function(...)`` call or ``window.Function(...)`` lands here.
+        if fn == "eval" or fn == "Function" or fn.endswith(".Function"):
             if _js_external(args):
                 findings.append(_ev(
                     "deser.eval", "eval 外部输入", "critical", path, line,
                     f"eval/Function 处理外部输入: {args}", "重构，不使用 eval", "deserialization"))
+
+        # string-code timers: setTimeout/setInterval/setImmediate convert a
+        # non-function first argument to a string and evaluate it as source
+        # (CWE-95) -- the async twin of ``eval``.  A concat-built or
+        # externally-sourced code string is the same injection surface, while
+        # a function callback or a static literal is not provably dynamic.
+        if fn in ("setTimeout", "setInterval", "setImmediate") \
+                or fn.endswith((".setTimeout", ".setInterval", ".setImmediate")):
+            first = _first_positional(call, bsrc)
+            if first is not None:
+                code, ntype = first
+                if ntype not in ("arrow_function", "function", "function_expression"):
+                    if "+" in code or "${" in code or _js_external(code):
+                        findings.append(_ev(
+                            "deser.eval", "eval 等价 (字符串定时器)", "critical", path, line,
+                            f"{fn} 以动态字符串为代码: {code}",
+                            "改为函数回调，勿拼接代码字符串", "deserialization"))
+
+        # JSON.parse with reviver? Not a rule; skip.
+
+        # SQL concat
         if _fn_is_db_query(fn):
             if _contains_sql(args) and _has_concat(args):
                 findings.append(_ev(
                     "injection.sql_concat", "SQL 拼接注入", "critical", path, line,
                     f"SQL 通过字符串拼接: {args}", "使用参数化查询 ($1)", "injection"))
-        if fn in ("exec", "execa", "spawn") or fn.endswith(".exec") or fn.endswith(".spawn"):
-            if "shell" in args.lower() and _has_concat(args):
+
+        # shell: exec/spawn with shell and concat.  execSync / spawnSync /
+第 46 页 共 60 页
+cursor-scan V1.0
+
+        # fork are the synchronous / child forms of the same commands and
+        # carry the identical injection surface; ``require('child_process')
+        # .execSync(...)`` surfaces as fn ending in ``.execSync``.  execFile
+        # is the argv-form sibling: it takes an executable *plus* an argv
+        # array, so a concat only reaches a shell via shell:true or an
+        # ``sh -c``-style command line.
+        #
+        # Which slot the concat lands in decides whether a shell is involved:
+        # exec/execSync always interpret their string command in a shell,
+        # while spawn/spawnSync/fork/execa only do so with shell:true or an
+        # explicit ``sh -c`` style command line.  A concat buried in the
+        # *argument array* of a plain spawn reaches the child as a separate
+        # argv entry (no metacharacter expansion), so it must not fire shell
+        # injection -- only shell-involved or concat-built command strings.
+        if (fn in ("exec", "execa", "spawn", "execFile", "execSync", "execFileSync",
+                   "spawnSync", "fork")
+                or fn.endswith(".exec") or fn.endswith(".spawn")
+                or fn.endswith(".execFile")
+                or fn.endswith(".execSync") or fn.endswith(".execFileSync")
+                or fn.endswith(".spawnSync")
+                or fn.endswith(".fork")) \
+                and not fn.startswith("db."):
+            # A ``db.`` receiver is a SQL executor (better-sqlite3
+            # ``db.exec`` / ``db.prepare``), never a child_process shell
+            # entry, so it is excluded here; the SQL branch above owns it.
+            first = _first_positional(call, bsrc)
+            cmd = first[0] if first is not None else ""
+            cmd_dynamic = _has_concat(cmd)
+            sh_dash_c = _SHELL_BIN.search(cmd) is not None \
+                and _SHELL_DASH_C.search(args) is not None \
+                and _has_concat(args)
+            if _SHELL_OPT_FALSE.search(args):
+                # Explicit shell:false disables the shell; a concat-built
+                # command string is never interpreted by a shell here.
+                pass
+            elif _SHELL_OPT_TRUE.search(args) and _has_concat(args):
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                     f"{fn} 开启 shell 并拼接命令: {args}", "使用参数列表", "injection"))
-            elif _has_concat(args):
+            elif cmd_dynamic or sh_dash_c:
                 findings.append(_ev(
                     "injection.shell_concat", "Shell 拼接注入", "critical", path, line,
                     f"命令字符串由拼接构造: {args}", "使用参数列表", "injection"))
-        if fn == "fs.chmod" or fn.endswith(".chmod") or fn == "chmodSync":
-            mode = _last_arg(call, src)
-            m = mode.replace("0o", "").replace("0x", "")
-第 54 页 共 60 页
-cursor-scan V1.0
 
+        # chmod 0777 (node fs)
+        if fn == "fs.chmod" or fn.endswith(".chmod") or fn == "chmodSync":
+            mode = _last_arg(call, bsrc)
+            m = mode.replace("0o", "").replace("0x", "")
             if mode in ("0o777", "777") or "0o666" in mode:
                 findings.append(_ev(
+第 47 页 共 60 页
+cursor-scan V1.0
+
                     "perms.chmod_world_writable", "世界可写 chmod", "high", path, line,
                     f"fs.chmod 权限 {mode} 世界可写", "使用 0o600", "permissions"))
         if "writeFile" in fn or "writeFileSync" in fn:
@@ -2881,17 +2506,187 @@ cursor-scan V1.0
                 findings.append(_ev(
                     "perms.tmp_write_insecure", "不安全 /tmp 写入", "medium", path, line,
                     "直接写 /tmp 易受符号链接攻击", "使用 os.tmpdir()+mkstemp 私有文件", "permissions"))
+
+    # new Function(...) parses as a ``new_expression``, which ``collect_calls``
+    # never yields (the dead-code trap that hid this from detection).  Only the
+    # Function constructor can execute a string body at runtime, so scan those
+    # nodes on their own pass.
+    for new_expr in collect_new_expressions(root):
+        ctor = new_expression_name(new_expr, bsrc)
+        if ctor != "Function":
+            continue
+        body = args_text(new_expr, bsrc)
+        if not _js_external(body):
+            continue
+        findings.append(_ev(
+            "deser.eval", "eval 外部输入", "critical", path, _line_for(new_expr),
+            f"new Function 处理外部输入: {body}", "重构，不使用 Function 构造器", "deserialization"))
+
+
+# --- shared static-literal/int helpers --------------------------------------
+
+def _py_static_int(txt: str) -> int | None:
+    """Value of a static Python integer literal; ``None`` otherwise.
+
+    Accepts plain digits and Python numeric separators (``100_000``); rejects
+    identifiers, arithmetic expressions and any dotted/negative junk so a
+    dynamic iteration count never flags.
+    """
+    t = txt.strip().replace("_", "")
+    if t.isdigit():
+        return int(t)
+    return None
+
+
+def _js_positional_args(call, bsrc):
+    """Source texts of the positional (non-keyword) JS/TS arguments.
+
+    JS has no keyword arguments; this simply skips the comment nodes that
+    tree-sitter keeps as named children of ``arguments``.
+    """
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return []
+    return [_bstr(bsrc, a.start_byte, a.end_byte)
+第 48 页 共 60 页
+cursor-scan V1.0
+
+            for a in args.named_children
+            if a.type not in ("comment",)]
+
+
+_JS_PLAIN_STRING = re.compile(r"^(['\"])(.*?)\1$", re.S)
+
+# Shell-interpreting binaries handed to subprocess/spawn-style calls.  ``bash
+# -c`` / ``sh -c`` make the call execute a command line through a shell even
+# though it carries no ``shell:``/``shell=True`` option (both the JS spawn
+# family and the Python subprocess family).
+_SHELL_BIN = re.compile(r"(?i)\b(sh|bash|zsh|dash)\b")
+_SHELL_DASH_C = re.compile(r"-c\b")
+# Explicit shell options.  shell:true (JS) enables a shell; an explicit
+# shell:false / shell=False is a security configuration that disables it, so
+# a shell-off line must not fire shell-concat even when the command string is
+# concat-built.  These match only the *literal* options (a ``shell`` variable
+# read from elsewhere is not a visible opt-out).
+_SHELL_OPT_TRUE = re.compile(r"shell\s*:\s*true", re.I)
+_SHELL_OPT_FALSE = re.compile(r"shell\s*:\s*false", re.I)
+_SHELL_EQ_FALSE = re.compile(r"shell\s*=\s*False", re.I)
+
+
+def _first_positional(call, bsrc):
+    """``(source_text, tree_sitter_type)`` of the first positional argument,
+    or ``None`` for a call with no arguments.  Node type discriminates the
+    string-code timer forms: ``arrow_function``/``function`` callbacks are
+    safe, while a RHS whose type is not a function *and* whose text contains
+    concat/interpolation/external markers is a dynamic code string.
+    """
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return None
+    named = [a for a in args.named_children if a.type != "comment"]
+    if not named:
+        return None
+    return _bstr(bsrc, named[0].start_byte, named[0].end_byte), named[0].type
+
+
+def _first_arg_is_list(call, bsrc) -> bool:
+    """True when the first positional argument is a list literal (the argv
+    form of subprocess / spawn).  Python parses ``["ls", d]`` with node type
+    ``list``; JS/TS parse array literals as ``array``."""
+    first = _first_positional(call, bsrc)
+    return first is not None and first[1] in ("list", "array")
+
+
+def _js_plain_string(txt: str) -> str | None:
+    """Value of a static single/double-quoted JS string literal; ``None`` otherwise.
+
+    Backtick templates and identifiers are rejected: templates with ``${...}``
+第 49 页 共 60 页
+cursor-scan V1.0
+
+    are dynamic, and an identifier's value is unknowable statically.  Used for
+    the positional IV argument of ``createCipheriv`` where only a plain quoted
+    constant proves the IV is fixed.
+    """
+    m = _JS_PLAIN_STRING.match(txt.strip())
+    return m.group(2) if m else None
+
+
 def _fn_is_db_query(fn: str) -> bool:
     fn = fn.lower()
-    return any(k in fn for k in ("db.query", ".query(", ".run(", ".all(", ".get(",
-                                 "mysql.query", "pg.query", "knex.raw", "sequelize.query",
-                                 "prisma.")) or fn.endswith(".execute")
+    # Express / Fastify request and route objects expose .query (URL-query
+    # params), .get (response headers) and .all (route registration): those
+    # are data getters, never SQL entry points, so their receivers are
+    # excluded before the suffix matches can swallow a SQL-keyword concat.
+    if fn.startswith(("req.", "request.", "res.", "response.", "router.", "app.")):
+        return False
+    return any(k in fn for k in ("db.query", "db.exec", "mysql.query", "pg.query",
+                                 "knex.raw", "sequelize.query", "prisma.")) \
+        or fn.endswith((".query", ".run", ".all", ".get", ".execute", ".prepare"))
+
+
 def _js_external(args: str) -> bool:
+    """Heuristic: does this JS snippet draw on external input?
+
+    Conservative by design -- static string literals stay quiet and a bare
+    identifier is ambiguous, so only named external sources count.  Both
+    server-side request plumbing (req./request./body./ctx./process.env...) and
+    browser DOM-XSS sources (location./window.name/document.cookie/navigator.
+    userAgent/localStorage, the browser twin of request data) drive the
+    eval-family rules: a code string built from any of them is
+    attacker-influenceable.
+    """
     low = args.lower()
     return any(x in low for x in ("req.", "request.", "query.", "body.", "ctx.",
-                                  "process.env", "input", "form", "url."))
-# ----- 文件: webapp.py (280 行) -----
+                                  "process.env", "input", "form", "url.",
+                                  # browser DOM sources (OWASP DOM XSS)
+                                  "location.", "window.name", "document.cookie",
+                                  "document.url", "document.referrer",
+                                  "useragent", "localstorage", "sessionstorage"))
+
+
+_JS_STATIC_STRING = re.compile(r"^[`\"']([A-Za-z0-9_.\-]+)[`\"']")
+
+
+def _js_static_string_arg(args: str) -> str | None:
+    """Return the value of a static first string argument of a JS call.
+
+    ``args`` is the raw source text of the ``arguments`` node, which includes
+    the wrapping parentheses (``("md5")``). Only a static first literal counts
+    -- single-quote, double-quote or backtick -- so ``('sha1', key)`` and
+第 50 页 共 60 页
+cursor-scan V1.0
+
+    ``(`md5`)`` are recognised, while identifiers, concatenations and
+    interpolated templates return ``None`` (dynamic, unverifiable).
+    """
+    inner = args.strip()
+    if not (inner.startswith("(") and inner.endswith(")")):
+        return None
+    m = _JS_STATIC_STRING.match(inner[1:-1].strip())
+    return m.group(1) if m else None
+# ----- 文件: webapp.py (318 行) -----
+"""AC6 Web dashboard: a zero-dependency, fully-offline dashboard over scan
+history snapshots.
+
+Serves the history directory over the Python stdlib ``http.server`` (no
+network access, no GPU). It reads the same JSON snapshots the CLI writes, so a
+browser can list scan history, inspect one snapshot (scorecard + per-item
+evidence) and compare two snapshots without ever leaving the machine.
+
+Routes (all GET):
+  /                                 index: list snapshots newest-first
+  /snapshot/<name>                  detail page for one snapshot
+  /diff?before=<ref>&after=<ref>    two-snapshot comparison
+  /api/history.json                 snapshot list as JSON
+  /api/snapshot/<name>[.json]       raw snapshot as JSON
+
+The ``route`` function is a pure dispatch that returns ``(status, mime, body)``
+and is used both by the HTTP handler and directly by the test-suite.
+"""
+
 from __future__ import annotations
+
 import functools
 import glob
 import html
@@ -2901,15 +2696,28 @@ import re
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Optional, Tuple
+
 from .history import (default_history_dir, diff_snapshots, list_history,
                       load_snapshot, resolve_snapshot)
 from .models import DIMENSION_LABELS, SEVERITY_ORDER
+
 CONTENT_HTML = "text/html; charset=utf-8"
 CONTENT_JSON = "application/json; charset=utf-8"
+
 _SEV_CLASS = {"critical": "critical", "high": "high",
               "medium": "medium", "low": "low"}
+
+第 51 页 共 60 页
+cursor-scan V1.0
+
+
+# --------------------------------------------------------------------------
+# Pure request dispatch (also the test seam)
+# --------------------------------------------------------------------------
+
 def route(history_dir: str, raw_path: str,
           query: Optional[Dict[str, str]] = None) -> Tuple[int, str, bytes]:
+    """Handle one GET request. ``query`` maps parameter name -> first value."""
     hd = os.path.realpath(history_dir)
     path = raw_path.rstrip("/") or "/"
     query = query or {}
@@ -2921,13 +2729,18 @@ def route(history_dir: str, raw_path: str,
         return _api_snapshot(hd, path[len("/api/snapshot/"):])
     if path.startswith("/snapshot/"):
         return _page_snapshot(hd, path[len("/snapshot/"):])
-第 55 页 共 60 页
-cursor-scan V1.0
-
     if path == "/diff":
         return _page_diff(hd, query)
     return _page_error(hd, 404, "未知路径", f"路径 {raw_path!r} 不存在。")
+
+
 def _safe_snapshot_path(history_dir: str, name: str) -> Optional[str]:
+    """Resolve ``name`` to a snapshot inside ``history_dir`` (safe, or None).
+
+    Accepts an exact snapshot filename or a target slug (newest match, mirroring
+    the CLI's ``resolve_snapshot``). Refuses anything that would escape the
+    history directory.
+    """
     if not name or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
         return None
     hd_real = os.path.realpath(history_dir)
@@ -2941,9 +2754,20 @@ def _safe_snapshot_path(history_dir: str, name: str) -> Optional[str]:
         return resolve_snapshot(name, hd_real)
     except FileNotFoundError:
         return None
+
+
+# --------------------------------------------------------------------------
+# JSON APIs
+# --------------------------------------------------------------------------
+
+第 52 页 共 60 页
+cursor-scan V1.0
+
 def _json(status: int, doc: dict) -> Tuple[int, str, bytes]:
     payload = json.dumps(doc, ensure_ascii=False, indent=2)
     return status, CONTENT_JSON, payload.encode("utf-8")
+
+
 def _api_history(history_dir: str) -> Tuple[int, str, bytes]:
     entries = list_history(history_dir)
     doc = {
@@ -2958,43 +2782,116 @@ def _api_history(history_dir: str) -> Tuple[int, str, bytes]:
         } for e in entries],
     }
     return _json(200, doc)
+
+
 def _api_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
+    # Accept an optional trailing ".json" (see route docstring). Try the name
+    # verbatim first so a slug/target that legitimately ends in ".json" still
+    # resolves; only fall back to the suffix-stripped form.
     path = _safe_snapshot_path(history_dir, name)
     if path is None and name.endswith(".json"):
         path = _safe_snapshot_path(history_dir, name[:-len(".json")])
     if path is None:
         return _json(404, {"error": f"未找到快照: {name!r}"})
     return _json(200, load_snapshot(path))
+
+
+# --------------------------------------------------------------------------
+# HTML rendering helpers
+# --------------------------------------------------------------------------
+
 def _e(value) -> str:
+    """Escape a value for safe embedding in HTML (XSS guard for findings)."""
     return html.escape(str(value if value is not None else ""), quote=True)
+
+
 def _grade_class(grade: str) -> str:
     return f"grade-{str(grade).lower()}"
+
+
 def _ordered_findings(findings: list) -> list:
     def key(f):
         sev = f.get("severity", "low")
         return (-SEVERITY_ORDER.get(sev, 1),
-                f.get("file", ""), f.get("line", 0))
-第 56 页 共 60 页
+第 53 页 共 60 页
 cursor-scan V1.0
 
+                f.get("file", ""), f.get("line", 0))
     return sorted(findings, key=key)
+
+
 _PAGE_CSS = """\
+:root { color-scheme: light; }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+       margin: 0; color: #1f2937; background: #f3f4f6; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 24px 16px 60px; }
+header h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: #6b7280; font-size: 13px; }
+table { border-collapse: collapse; width: 100%; background: #fff;
+        box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+th, td { text-align: left; padding: 8px 10px; font-size: 13px;
+         border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+th { background: #f9fafb; font-weight: 600; white-space: nowrap; }
+a { color: #2563eb; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.card { background: #fff; border-radius: 8px; padding: 16px 20px;
+        margin-top: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.card h2 { margin: 0 0 10px; font-size: 15px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
+         font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
+tr.sev-critical { background: #fef2f2; } tr.sev-critical .badge { background: #b91c1c; }
+tr.sev-high { background: #fffbeb; }     tr.sev-high .badge { background: #d97706; }
+tr.sev-medium { background: #eff6ff; }   tr.sev-medium .badge { background: #2563eb; }
+tr.sev-low .badge { background: #6b7280; }
+.score { font-size: 40px; font-weight: 800; line-height: 1; }
+.grade-a { color: #15803d; } .grade-b { color: #16a34a; }
+.grade-c { color: #ca8a04; } .grade-d { color: #b45309; }
+.grade-f { color: #b91c1c; }
+pre.snippet { background: #0f172a; color: #e2e8f0; padding: 10px;
+              border-radius: 6px; font-size: 12px; overflow-x: auto; }
+form.diff { display: flex; gap: 8px; align-items: center; margin: 0;
+            flex-wrap: wrap; }
+form.diff select { padding: 6px; border: 1px solid #d1d5db; border-radius: 6px;
+                   background: #fff; }
+button { padding: 6px 14px; border: 0; border-radius: 6px;
+         background: #2563eb; color: #fff; cursor: pointer; }
+.dim { display: inline-block; margin: 4px 8px 4px 0; padding: 8px 14px;
+       border-radius: 8px; background: #f9fafb; border: 1px solid #e5e7eb; }
+.dim b { display: block; font-size: 20px; }
+.muted { color: #6b7280; }
+.metric { display: inline-block; margin-right: 28px; }
+.metric .label { font-size: 12px; color: #6b7280; }
+.metric .value { font-size: 18px; font-weight: 700; }
+.delta-up { color: #15803d; font-weight: 700; }
+.delta-down { color: #b91c1c; font-weight: 700; }
+"""
+
+第 54 页 共 60 页
+cursor-scan V1.0
+
+
 def _page(title: str, body: str, nav: str = "",
           status: int = 200) -> Tuple[int, str, bytes]:
     title_html = _e(title) if status == 200 else f"{status} {_e(title)}"
     doc = (
+        "<!doctype html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
         f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{title_html} - cursor-scan</title>"
         f"<style>{_PAGE_CSS}</style></head><body>"
         f"<div class=\"wrap\"><header><h1>{title_html}</h1>"
         f"<p class=\"sub\">cursor-scan 离线仪表板</p></header>{nav}{body}"
+        "</div></body></html>"
     )
     return status, CONTENT_HTML, doc.encode("utf-8")
+
+
 def _page_error(history_dir: str, status: int, title: str,
                 msg: str) -> Tuple[int, str, bytes]:
     nav = '<p><a href="/">← 历史列表</a></p>'
     body = f'<div class="card"><p>{_e(msg)}</p></div>'
     return _page(title, body, nav, status=status)
+
+
 def _findings_table(findings: list) -> str:
     if not findings:
         return '<p class="muted">没有发现问题。</p>'
@@ -3004,6 +2901,10 @@ def _findings_table(findings: list) -> str:
         snippet = f.get("code_snippet")
         snip = f'<pre class="snippet">{_e(snippet)}</pre>' if snippet else ""
         rows.append(
+            "<tr class=\"{cls}\">"
+            "<td><span class=\"badge\">{sev}</span></td>"
+            "<td>{rule}</td><td>{dim}</td>"
+            "<td>{file}:{line}</td><td>{msg} {snip}</td><td>{fix}</td></tr>"
             .format(
                 cls=_SEV_CLASS.get(sev, "low"), sev=sev.upper(),
                 rule=_e(f.get("rule_id", "")),
@@ -3015,22 +2916,35 @@ def _findings_table(findings: list) -> str:
             )
         )
     return (
+        "<table><tr><th>严重度</th><th>规则</th><th>维度</th><th>位置</th>"
         "<th>说明</th><th>修复建议</th></tr>" + "".join(rows) + "</table>"
     )
+第 55 页 共 60 页
+cursor-scan V1.0
+
+
+
+# --------------------------------------------------------------------------
+# Pages
+# --------------------------------------------------------------------------
+
 def _page_index(history_dir: str) -> Tuple[int, str, bytes]:
     entries = list_history(history_dir)
     nav = ""
     if not entries:
         body = ("<div class=\"card\"><p>没有保存的扫描历史。</p>"
+                "<p>先运行 <code>cursor-scan &lt;项目目录&gt;</code> 生成第一张快照，"
                 "再回到这里查看。</p></div>")
         return _page("扫描历史", body, nav)
+
     rows = []
     for e in entries:
         name = os.path.basename(e.path)
-第 57 页 共 60 页
-cursor-scan V1.0
-
         rows.append(
+            "<tr><td>{started}</td><td>{target}</td>"
+            "<td class=\"{grade_cls}\">{score} / 100</td><td>{grade}</td>"
+            "<td>{findings}</td><td>{files}</td>"
+            "<td><a href=\"/snapshot/{name}\">查看</a></td></tr>"
             .format(started=_e(e.started_at), target=_e(e.target),
                     grade_cls=_grade_class(e.grade), score=_e(e.score),
                     grade=_e(e.grade), findings=e.findings,
@@ -3038,7 +2952,9 @@ cursor-scan V1.0
                     name=urllib.parse.quote(name))
         )
     table = ("<table><tr><th>时间</th><th>目标</th><th>评分</th><th>等级</th>"
+             "<th>发现</th><th>文件</th><th></th></tr>"
              + "".join(rows) + "</table>")
+
     def options(selected_idx: int) -> str:
         out = []
         for i, e in enumerate(entries):
@@ -3048,17 +2964,27 @@ cursor-scan V1.0
             out.append(f'<option value="{urllib.parse.quote(os.path.basename(e.path))}"{sel}>'
                        f"{_e(label)}</option>")
         return "".join(out)
+
     before_idx = 1 if len(entries) >= 2 else 0
     after_idx = 0
     form = (
+        '<form class="diff" method="get" action="/diff">'
         f'<select name="before">{options(before_idx)}</select>'
         f'<select name="after">{options(after_idx)}</select>'
+        '<button type="submit">比较两次扫描</button></form>'
+第 56 页 共 60 页
+cursor-scan V1.0
+
     )
     body = (
+        '<div class="card"><p class="sub">比较最佳基线（默认取最新两次扫描）。'
+        '也可用 CLI：<code>cursor-scan --diff &lt;before&gt; &lt;after&gt;</code></p>'
         + form + "</div>"
         + '<div class="card">' + table + "</div>"
     )
     return _page("扫描历史", body, nav)
+
+
 def _page_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
     path = _safe_snapshot_path(history_dir, name)
     if path is None:
@@ -3068,6 +2994,7 @@ def _page_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
     nav = '<p><a href="/">← 历史列表</a></p>'
     header = _score_header(doc)
     dims = "".join(
+        '<span class="dim"><b class="{cls}">{score}</b>{label}</span>'
         .format(score=_e(dim.get("score", 0)),
                 cls=_grade_class(doc.get("grade", "?")),
                 label=_e(DIMENSION_LABELS.get(d, d)))
@@ -3079,14 +3006,36 @@ def _page_snapshot(history_dir: str, name: str) -> Tuple[int, str, bytes]:
             + '<div class="card"><h2>逐项证据</h2>' + table + "</div>")
     if suppressed:
         body += (
+            '<div class="card"><h2>已忽略的发现（{n}）</h2>'
+            '<p class="muted">这些发现被 --ignore 或 .cursor-scan.json 抑制，'
+            '不参与评分与门禁判定。</p>{inner}'
             .format(n=len(suppressed), inner=_findings_table(suppressed))
-第 58 页 共 60 页
-cursor-scan V1.0
-
         ) + "</div>"
     return _page(f"快照 {os.path.basename(path)}", body, nav)
+
+
 def _score_header(doc: dict) -> str:
     return (
+        '<div class="card"><span class="score">{score}</span>'
+        '<span class="{grade_cls}" style="font-size:20px;font-weight:700">'
+        ' {grade}</span>'
+        '<div style="margin-top:12px">'
+        '<span class="metric"><span class="label">目标</span>'
+        '<span class="value">{target}</span></span>'
+        '<span class="metric"><span class="label">时间</span>'
+        '<span class="value">{started}</span></span>'
+        '<span class="metric"><span class="label">文件</span>'
+第 57 页 共 60 页
+cursor-scan V1.0
+
+        '<span class="value">{scanned} 扫描 / {skipped} 跳过</span></span>'
+        '<span class="metric"><span class="label">发现</span>'
+        '<span class="value">{findings}</span></span>'
+        '<span class="metric"><span class="label">已忽略</span>'
+        '<span class="value">{suppressed}</span></span>'
+        '<span class="metric"><span class="label">耗时</span>'
+        '<span class="value">{dur}s</span></span>'
+        "</div></div>"
     ).format(
         score=_e(doc.get("score", 0)),
         grade_cls=_grade_class(doc.get("grade", "?")),
@@ -3099,6 +3048,8 @@ def _score_header(doc: dict) -> str:
         suppressed=len(doc.get("suppressed", [])),
         dur=doc.get("duration_sec", "?"),
     )
+
+
 def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes]:
     nav = '<p><a href="/">← 历史列表</a></p>'
     before_ref, after_ref = query.get("before", ""), query.get("after", "")
@@ -3109,6 +3060,7 @@ def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes
                            "至少一个快照引用未找到；请从历史列表中选择。")
     before, after = load_snapshot(before_path), load_snapshot(after_path)
     diff = diff_snapshots(before, after)
+
     delta = diff.score_delta
     delta_html = (f'<span class="delta-up">+{delta}</span>' if delta > 0
                   else f'<span class="delta-down">{delta}</span>' if delta < 0
@@ -3126,18 +3078,20 @@ def _page_diff(history_dir: str, query: Dict[str, str]) -> Tuple[int, str, bytes
         f'<span style="padding-left:12px">({delta_html})</span>'
         f'<p>等级 {_e(before.get("grade", "?"))} → '
         f'{_e(after.get("grade", "?"))}；{_e(counts)}。</p></div>'
+第 58 页 共 60 页
+cursor-scan V1.0
+
     )
+
     def section(title: str, findings: list) -> str:
         details = (
             f'<details class="card" open><summary style="cursor:pointer">'
             f'<h2 style="display:inline;margin:0">{title}'
             f'（{len(findings)}）</h2></summary>'
             + _findings_table(findings) + "</details>"
-第 59 页 共 60 页
-cursor-scan V1.0
-
         ) if findings else ""
         return details
+
     body = score_row
     for title, items in (("新增", diff.added), ("修复", diff.fixed),
                          ("忽略（后一次扫描中被抑制）", diff.suppressed),
@@ -3149,12 +3103,22 @@ cursor-scan V1.0
             if diff.kept else "")
     body += kept
     return _page("扫描差异", body, nav)
+
+
+# --------------------------------------------------------------------------
+# HTTP server wrappers (thin: routing lives in ``route``)
+# --------------------------------------------------------------------------
+
 class DashboardHandler(BaseHTTPRequestHandler):
+    """Serves the dashboard. ``history_dir`` is injected by ``make_server``."""
+
     history_dir: str = "."
+
     def __init__(self, *args, history_dir: Optional[str] = None, **kwargs):
         if history_dir is not None:
             self.history_dir = history_dir
         super().__init__(*args, **kwargs)
+
     def do_GET(self):
         parsed = urllib.parse.urlsplit(self.path)
         query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
@@ -3166,14 +3130,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+第 59 页 共 60 页
+cursor-scan V1.0
+
     def log_message(self, *args):  # keep the dashboard console quiet
         pass
+
+
 def make_server(history_dir: str, host: str = "127.0.0.1", port: int = 0):
+    """Build a threaded HTTP server for the dashboard (tests pass port=0)."""
     hd = os.path.realpath(history_dir)
     handler = functools.partial(DashboardHandler, history_dir=hd)
     return ThreadingHTTPServer((host, port), handler)
+
+
 def run_dashboard(history_dir: Optional[str] = None, host: str = "127.0.0.1",
                   port: int = 8080) -> int:
+    """Run the dashboard until Ctrl+C. Returns the process exit code."""
     hd = history_dir or default_history_dir()
     os.makedirs(hd, exist_ok=True)
     httpd = make_server(hd, host, port)

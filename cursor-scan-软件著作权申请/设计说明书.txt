@@ -2,13 +2,15 @@ cursor-scan 本地安全债扫描软件 V1.0
 软件设计说明书
 
 （编写依据：GB/T 8567-2006《计算机软件文档编制规范》——《软件设计说明书》结构）
+编写：许达（中国移动研究院）
 
 =========================================================
 1  引言
 =========================================================
 
 1.1  编写目的
-本说明书描述 cursor-scan 本地安全债扫描软件 V1.0 的总体与详细设计，
+本说明书由 许达（中国移动研究院）编写，描述 cursor-scan 本地安全债
+扫描软件 V1.0 的总体与详细设计，
 作为软件实现、测试、维护及著作权登记的技术依据。读者对象为开发人员、
 测试人员、维护人员与软件评审人员。
 
@@ -339,12 +341,19 @@ cursor-scan 本地安全债扫描软件 V1.0
 
 3.5.4  deserialization.py / injection.py / permissions.py
     均为逐行正则回退模块，规则见 2.2 表：deserialization（RE_PICKLE、
-    RE_YAML_UNSAFE、RE_YAML_LOAD、RE_EVAL、RE_EXEC，import 行特判）、
-    injection（RE_SQL_CONCAT_PY、RE_SQL_FSTRING_ASSIGN、RE_SQL_CONCAT_JS、
-    RE_SHELL_CONCAT、RE_DANGEROUS_SHELL）、permissions（RE_CHMOD_0777、
-    RE_MKDIR_WORLD、RE_TMP_WRITE）。命中产出 dimension=dims 的 Evidence
-    （critical / critical / high）。与 AST 双层覆盖：AST 给语言内精确节
-    点，正则在其他语言兜底。
+    RE_YAML_UNSAFE、RE_YAML_LOAD、RE_EVAL、RE_EXEC，import 行特判）。
+    injection 覆盖 28 种语言后缀（py/js/php/java/ruby/go/cs/kt/rs/pl/
+    lua/cpp/swift/sh/r/ps1/sql/vb/scala/groovy/dart/m/ex/erl/jl/hs/clj/
+    fs），按语言分类的拼接模式逐一匹配：SQL 拼接（RE_SQL_CONCAT_*，
+    含 +、字符串插值 $、${}、#{}、%~、printf/format、sprintf、fmt.Printf、
+    str/format 等各语言特有写法，以及 Python f-string 赋值/调用
+    RE_SQL_FSTRING_ASSIGN/CALL 与 RE_SQL_FMT_ASSIGN）、shell 拼接
+    （RE_SHELL_CONCAT_*，含反引号命令替换与管道拼接）、RE_DANGEROUS_SHELL
+    （shell=True / Process.Start / os:cmd / Cmd 等危险执行）；匹配时先经
+    helpers.code_lines 规约（剔除注释与三引号内容），并将正则模式文本本身
+    排除于命中之外。permissions（RE_CHMOD_0777、RE_MKDIR_WORLD、
+    RE_TMP_WRITE）。命中产出 dimension=dims 的 Evidence。与 AST 双层覆盖：
+    AST 给 Python/JS/TS 语言内精确节点，正则在其余语言兜底。
 
 3.5.5  access_control.py 项目级规则
     (1) 输入：全项目 {rel_path: [(lineno, text)]}。
@@ -442,14 +451,14 @@ cursor-scan 本地安全债扫描软件 V1.0
 =========================================================
 附：模块与源文件对应表
 =========================================================
-  cli.py            —— 命令行入口/输出/门禁（约 240 行）
-  scan.py           —— 扫描编排（约 215 行）
-  scanners/ast.py   —— AST 扫描（约 290 行）
-  models.py         —— 数据模型（约 118 行）
-  history.py        —— 历史与差异（约 160 行）
-  webapp.py         —— 离线仪表板（约 325 行）
-  ignore.py         —— 抑制规则（约 43 行）
-  rules/helpers.py  —— 行规约器（约 75 行）
+  cli.py            —— 命令行入口/输出/门禁（240 行）
+  scan.py           —— 扫描编排（209 行）
+  scanners/ast.py   —— AST 扫描（484 行）
+  models.py         —— 数据模型（114 行）
+  history.py        —— 历史与差异（152 行）
+  webapp.py         —— 离线仪表板（318 行）
+  ignore.py         —— 抑制规则（39 行）
+  rules/helpers.py  —— 行规约器（70 行）
   rules/crypto/secrets/deps/deserialization/injection/permissions/
         access_control/xss —— 各维度规则
   __init__.py / __main__.py —— 包元信息与入口

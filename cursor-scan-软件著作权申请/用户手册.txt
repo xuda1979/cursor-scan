@@ -2,6 +2,7 @@ cursor-scan 本地安全债扫描软件 V1.0
 用户手册
 
 （编写依据：GB/T 8567-2006《计算机软件文档编制规范》——《用户手册》结构）
+编写：许达（中国移动研究院）
 
 =========================================================
 1  引言
@@ -23,13 +24,13 @@ cursor-scan 是一款本地静态安全扫描工具，扫描项目目录中的�
   SAST        静态应用安全测试
   SARIF       Static Analysis Results Interchange Format（2.1.0）
   CVE         公共漏洞与暴露
-  ‌AST          抽象语法树
-  ‌CLI         命令行界面
-  ‌CI          持续集成
-  ‌severity    发现严重度（critical / high / medium / low）
-  ‌snapshot    扫描历史快照（JSON 文件）
-  ‌suppressed  被 --ignore 或配置文件抑制的发现（不参与评分与门禁）
-  ‌gate/door   门禁：达到阈值即非零退出的 CI 判定
+  AST          抽象语法树
+  CLI         命令行界面
+  CI          持续集成
+  severity    发现严重度（critical / high / medium / low）
+  snapshot    扫描历史快照（JSON 文件）
+  suppressed  被 --ignore 或配置文件抑制的发现（不参与评分与门禁）
+  gate/door   门禁：达到阈值即非零退出的 CI 判定
 
 1.4  参考资料
   (1) 本项目 README.md 与 SPEC.md；

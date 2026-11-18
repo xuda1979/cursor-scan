@@ -157,3 +157,10 @@ python -m pytest tests/ -q   # 全量测试
 - [x] P2b Web dashboard（读取历史快照）
 - [x] P3 依赖风险 flag（requirements.txt / package.json 高危已知库）
 - [x] P4 XSS 检测维度（DOM sinks / React / document.write / 模板渲染）
+
+## 授权与协议
+
+双授权：源代码以 **GNU AGPL v3.0** 开源（见 [`LICENSE`](LICENSE)）。任何
+商业或营利性使用，或将其用于向他人销售/授权的产品与服务，均须事先获得
+著作权人（许达，中国移动研究院）的书面商业授权，详见
+[`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md)。
