@@ -49,7 +49,8 @@ _BINARY_RE = re.compile(rb"[\x00\x01\x02]")
 TEXT_EXTS = {
     ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
     ".rb", ".php", ".go", ".rs", ".java", ".kt", ".sh", ".bash", ".zsh", ".pl",
-    ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".sql", ".vue",
+    ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".ps1", ".sql",
+    ".vue",
     ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
     ".tf", ".cfg", ".conf",
 }

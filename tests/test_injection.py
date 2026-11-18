@@ -19,7 +19,11 @@ variable command argument) and R (DBI receivers `dbGetQuery` / `dbSendQuery` /
 `dbExecute` / `dbSendStatement` / `dbGetStatement` getting `paste0`/`paste`
 splices, `sprintf` printf-verb literals or `glue`/`glue_sql` `{var}`
 interpolation, including `<-` assignment builds, plus `system()` fed a
-`paste0`/`paste`/`sprintf`/`glue`-built command string)
+`paste0`/`paste`/`sprintf`/`glue`-built command string) and PowerShell
+(`Invoke-Sqlcmd` / `Invoke-DbaQuery` / `Invoke-DbaCmd` double-quoted
+`-Query` strings interpolating `$var` / `$(...)` or `+`-concatenated,
+including `$query = ...` assignment builds, plus `Invoke-Expression` / `iex`
+fed an interpolated or concatenated command string)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -1716,3 +1720,93 @@ class TestRShellConcat:
     def test_system2_arglist_is_quiet(self):
         assert self._reg('system2("ls", "/tmp")\n') == []
         assert self._reg('system2("cp", c("a.txt", "b.txt"))\n') == []
+
+
+class TestPs1SqlConcat:
+    """Regex-layer lock for PowerShell SQL concatenation: Invoke-Sqlcmd /
+    Invoke-DbaQuery / Invoke-DbaCmd handed a double-quoted query string that
+    interpolates a ``$var`` / ``$(...)`` subexpression, is ``+``-concatenated,
+    or built in a ``$query = "...SQL.." + ...`` assignment flags
+    ``injection.sql_concat``; parameterized ``@name`` placeholders,
+    single-quoted strings, static literals and ``@(...)``/``@'@'`` splatting
+    stay quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ps1", code)]
+
+    def test_invoke_sqlcmd_var_interp_flags(self):
+        assert self._reg(
+            'Invoke-Sqlcmd -Query "SELECT * FROM users WHERE name = $name" -ServerInstance $srv\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_invoke_sqlcmd_subexpression_flags(self):
+        assert self._reg(
+            'Invoke-Sqlcmd -Query "SELECT * FROM orders WHERE uid = $(Get-UserParam)" -ServerInstance $srv\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_invoke_sqlcmd_plus_concat_flags(self):
+        assert self._reg(
+            'Invoke-Sqlcmd -Query "SELECT " + $cols + " FROM t" -ServerInstance $srv\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_invoke_dbaquery_concat_flags(self):
+        assert self._reg(
+            'Invoke-DbaQuery -SqlInstance $srv -Query "DROP TABLE " + $tableName\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_form_flags(self):
+        assert self._reg(
+            '$query = "SELECT * FROM users WHERE email = " + $Email\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            'Invoke-Sqlcmd -Query "SELECT * FROM users WHERE name = @name" -ServerInstance $srv\n'
+        ) == []
+
+    def test_single_quote_literal_is_quiet(self):
+        # Single-quoted PowerShell strings perform no $ interpolation.
+        assert self._reg(
+            "Invoke-Sqlcmd -Query 'SELECT * FROM users WHERE name = $name'\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            'Invoke-Sqlcmd -Query "SELECT COUNT(*) FROM accounts" -ServerInstance $srv\n'
+        ) == []
+
+
+class TestPs1ShellConcat:
+    """Regex-layer lock for PowerShell shell concatenation: Invoke-Expression /
+    iex fed an interpolated or ``+``-concatenated command string flags
+    ``injection.shell_concat``; static commands / single-quoted strings and
+    argument-list invocation forms (Start-Process, & call operator) stay
+    quiet."""
+
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ps1", code)]
+
+    def test_iex_interp_flags(self):
+        assert self._reg(
+            'Invoke-Expression "Remove-Item $target -Recurse -Force"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_iex_subexpression_flags(self):
+        assert self._reg(
+            'Invoke-Expression "Get-Process $($proc) | Stop-Process -Force"\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_iex_plus_concat_flags(self):
+        assert self._reg(
+            'iex "Copy-Item " + $src + " " + $dst\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_iex_static_is_quiet(self):
+        assert self._reg('Invoke-Expression "ls -la"\n') == []
+
+    def test_single_quote_iex_is_quiet(self):
+        assert self._reg("iex 'Get-Date'\n") == []
+
+    def test_start_process_arglist_is_quiet(self):
+        assert self._reg('Start-Process -FilePath "notepad.exe" -ArgumentList @("-p", $Path)\n') == []
+        assert self._reg('& "C:\\Windows\\System32\\whoami.exe"\n') == []

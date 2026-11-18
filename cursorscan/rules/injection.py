@@ -482,6 +482,39 @@ RE_SHELL_CONCAT_R = re.compile(
     r")",
     re.I,
 )
+# PowerShell (.ps1): Invoke-Sqlcmd / Invoke-DbaQuery / Invoke-DbaCmd handed a
+# double-quoted query string that interpolates a `$var` / `$(...)`
+# subexpression or that is `+`-concatenated.  Double-quoted PowerShell strings
+# interpolate `$` even without an explicit join operator, so a SQL-keyword
+# literal containing `$var` / `$()` counts as concatenation.  Single-quoted
+# strings (no interpolation), `@name`/`@id` parameter placeholders, static
+# literals and @(...) splatting stay quiet.  A later-line
+# `$query = "...SQL..." + $var` assignment fed to `-Query $query` is caught by
+# the assignment form (line-anchored), mirroring RE_SQL_CONCAT_R_ASSIGN.
+# Shell forms: Invoke-Expression / iex fed an interpolated or
+# `+`-concatenated command string.
+RE_SQL_CONCAT_PS1 = re.compile(
+    r"\b(?:Invoke-Sqlcmd|Invoke-DbaQuery|Invoke-DbaCmd)\b[^\n;]*?(?:"
+    r"\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\$[a-zA-Z_{(@*]"
+    r"|\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\"\s*\+"
+    r"|\"\$\([^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)"
+    r")",
+    re.I,
+)
+RE_SQL_CONCAT_PS1_ASSIGN = re.compile(
+    r"^\s*\$?[A-Za-z_]\w*\s*=\s*(?:"
+    r"\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\$[a-zA-Z_{(@*]"
+    r"|\"[^\"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"]*\"\s*\+"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_PS1 = re.compile(
+    r"\b(?:Invoke-Expression|iex)\b\s*[(-]?\s*(?:"
+    r"\"[^\"]*\$[a-zA-Z_{(@*]"
+    r"|\"[^\"]*\"\s*\+"
+    r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -503,6 +536,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     swift_ext = ext == "swift"
     sh_ext = ext in ("sh", "bash", "zsh")
     r_ext = ext == "r"
+    ps1_ext = ext == "ps1"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -619,6 +653,15 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (params=list())"))
         if r_ext and RE_SHELL_CONCAT_R.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # PowerShell interpolated / concatenated -Query strings into
+        # Invoke-Sqlcmd / Invoke-DbaQuery, and Invoke-Expression fed an
+        # interpolated / concatenated command string.
+        if ps1_ext and (RE_SQL_CONCAT_PS1.search(line) or RE_SQL_CONCAT_PS1_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (@参数)"))
+        if ps1_ext and RE_SHELL_CONCAT_PS1.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
