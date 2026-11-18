@@ -3458,6 +3458,89 @@ class TestNimSqlConcat:
         ) == []
 
 
+class TestCrystalSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cr", code)]
+
+    def test_db_exec_flags(self):
+        assert self._reg(
+            'DB.exec conn, "SELECT * FROM orders WHERE uid = " + uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_flags(self):
+        assert self._reg(
+            'DB.query conn, "INSERT INTO accounts (name) VALUES (\'" + user_name + "\')"\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parenless_query_all_flags(self):
+        assert self._reg(
+            'conn.query_all "UPDATE accounts SET balance = " + amount\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_one_flags(self):
+        assert self._reg(
+            'DB.query_one conn, "DELETE FROM sessions WHERE sid = " + sid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_each_flags(self):
+        assert self._reg(
+            'DB.query_each conn, "ALTER TABLE users ADD COLUMN " + col do |rs|\nend\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_interpolation_flags(self):
+        assert self._reg(
+            'sql : String = "SELECT * FROM users WHERE name = \'#{k}\'"\n'
+            "DB.exec conn, sql\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'DB.exec conn, "SELECT * FROM users"\n'
+        ) == []
+
+    def test_placeholder_is_quiet(self):
+        assert self._reg(
+            'DB.exec conn, "SELECT * FROM orders WHERE uid = ?", uid\n'
+        ) == []
+
+    def test_bound_args_are_quiet(self):
+        assert self._reg(
+            'DB.exec conn, "SELECT * FROM users", params\n'
+        ) == []
+
+
+class TestCrystalShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cr", code)]
+
+    def test_system_interpolation_flags(self):
+        assert self._reg(
+            'system("rm -rf #{dir}")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_concat_flags(self):
+        assert self._reg(
+            'system("grep " + q + " /var/log/messages")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_backtick_interpolation_flags(self):
+        assert self._reg(
+            "`ls -la #{folder}`\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_run_flags(self):
+        assert self._reg(
+            'Process.run("cat " + p + " | wc -l")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_commands_are_quiet(self):
+        assert self._reg(
+            'system("ls -la /tmp")\n'
+            "`uname -a`\n"
+            'Process.run("sh", ["-c", "uname -a"])\n'
+        ) == []
+
+
 class TestNimShellConcat:
     def _reg(self, code: str):
         return [(f.rule_id, f.line) for f in analyze_injection("x.nim", code)]

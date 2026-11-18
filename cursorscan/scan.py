@@ -53,7 +53,7 @@ TEXT_EXTS = {
     ".vb", ".scala", ".groovy", ".gradle", ".dart", ".m", ".mm", ".ex", ".exs",
     ".erl", ".hrl", ".jl", ".hs", ".lhs", ".clj", ".cljs", ".cljc", ".fs",
     ".fsi", ".fsx", ".pas", ".pp", ".dpr", ".vbs", ".asp", ".cfm", ".cfc",
-    ".tcl", ".ml", ".mli", ".nim", ".vue", ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
+    ".tcl", ".ml", ".mli", ".nim", ".cr", ".vue", ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
     ".tf", ".cfg", ".conf",
 }
 

@@ -1052,6 +1052,40 @@ RE_SHELL_CONCAT_NIM = re.compile(
     r"\b(?:execShellCmd|execProcess|execCmdEx)\s*\(?[\"'][^\"']*[\"']\s*&",
     re.I,
 )
+# Crystal (.cr): the signature taint is a `#{}`-interpolated or `+`-concatenated
+# query string fed to the DB module drivers (exec/query/query_all/query_one/
+# query_each, parenless or parenthesized), plus the `sql/query = ...` assignment
+# build consumed by a DB call on a later line, and an interpolated /
+# concatenated command string fed to system() / Process.run / backtick `` `...` ``
+# execution.  Crystal only interpolates double-quoted strings, so the
+# interpolation branches require a double-quoted literal.  `?` placeholders,
+# bound args and static literals stay quiet.
+RE_SQL_CONCAT_CR = re.compile(
+    r"\b(?:(?:DB|db)\.|(?:conn|db|connection|client)\.)?"
+    + r"(?:exec|query|query_all|query_one|query_each)"
+    + r"\s*\(?[^\"'\n]*(?:"
+    + r'"' + r"[^\"#]*" + _SQL_KW + r"[^\"#]*" + r'#\{'
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")",
+    re.I,
+)
+RE_SQL_CONCAT_CR_ASSIGN = re.compile(
+    r"^\s*(?:sql|query|stmt)\s*(?::\s*[A-Za-z_]\w*)?\s*=\s*(?:"
+    + r'"' + r"[^\"#]*" + _SQL_KW + r"[^\"#]*" + r'#\{'
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_CR = re.compile(
+    r"\bsystem\s*\(\s*\"[^\"#]*(?:#\{|[\"']\s*\+)"
+    + r"|\bsystem\s*\(\s*'[^']*'\s*\+"
+    + r"|`[^`]*#\{"
+    + r"|Process\.run\s*\(\s*(?:"
+    + r"\"[^\"#]*(?:#\{|[\"']\s*\+)"
+    + r"|'[^']*'\s*\+"
+    + r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1092,6 +1126,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     tcl_ext = ext == "tcl"
     ml_ext = ext in ("ml", "mli")
     nim_ext = ext == "nim"
+    cr_ext = ext == "cr"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1346,6 +1381,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if nim_ext and RE_SHELL_CONCAT_NIM.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if cr_ext and (RE_SQL_CONCAT_CR.search(line) or RE_SQL_CONCAT_CR_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if cr_ext and RE_SHELL_CONCAT_CR.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
