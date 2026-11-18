@@ -996,6 +996,37 @@ RE_SHELL_CONCAT_TCL = re.compile(
     re.I,
 )
 
+# OCaml (.ml / .mli): the signature taint is a `^`-concatenated query string
+# fed to the sqlite3-ocaml / mysql-ocaml style sinks (`Sqlite3.exec db "..." ^
+# v` with an optional parenthesized handle, `Sqlite3.prepare`, `Mysql.exec`,
+# `Postgresql.exec`), plus a `let sql = "..." ^ x in ...` assignment build
+# consumed by a DB call on a later line.  (`db#exec`-style method syntax is
+# not line-detected: the shared line reducer strips unquoted `#` as a comment
+# marker, so only module-qualified call sites survive reduction.)  The shell
+# sinks are `Sys.command ("..." ^ v)` and the `Unix.open_process_in/out/full`
+# pipe family fed a `^`-concatenated filter string.  Static SQL literals,
+# `?`-placeholder parameterized calls, and static command strings stay quiet.
+RE_SQL_CONCAT_OCAML = re.compile(
+    r"\b(?:Sqlite3\.(?:exec|exec_no_headers|prepare)|Mysql\.(?:exec|prepare)|"
+    + r"Postgresql\.(?:exec|execv|exec_async)|PGOCaml\.(?:execute|exec)|"
+    + r"Caqti_blocking\.(?:exec|execv|query)|Caqti_lwt\.(?:exec|query))"
+    + r"\s*\(?[^\"'\n]*("
+    + _SQL_STR
+    + r")\s*\^",
+    re.I,
+)
+RE_SQL_CONCAT_OCAML_ASSIGN = re.compile(
+    r"^\s*let\s+[A-Za-z_]\w*\s*=\s*("
+    + _SQL_STR
+    + r")\s*\^",
+    re.I,
+)
+RE_SHELL_CONCAT_OCAML = re.compile(
+    r"\b(?:Sys\.command|Unix\.(?:system|open_process_in|open_process_out|open_process_full))"
+    + r"\s*\(?[\"'][^\"']*[\"']\s*\^",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1033,6 +1064,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     vbs_ext = ext in ("vbs", "asp")
     cfm_ext = ext in ("cfm", "cfc")
     tcl_ext = ext == "tcl"
+    ml_ext = ext in ("ml", "mli")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1275,6 +1307,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用 ? 占位符参数化查询"))
         if tcl_ext and RE_SHELL_CONCAT_TCL.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if ml_ext and (RE_SQL_CONCAT_OCAML.search(line) or RE_SQL_CONCAT_OCAML_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if ml_ext and RE_SHELL_CONCAT_OCAML.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

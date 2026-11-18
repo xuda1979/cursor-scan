@@ -3331,3 +3331,77 @@ class TestTclShellConcat:
     def test_static_open_pipe_is_quiet(self):
         assert self._reg('open "| grep error /var/log/messages"\n') == []
 
+
+class TestOcamlSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ml", code)]
+
+    def test_sqlite3_exec_caret_flags(self):
+        assert self._reg(
+            'Sqlite3.exec db "SELECT * FROM orders WHERE uid = " ^ uid;;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_prepare_caret_flags(self):
+        assert self._reg(
+            "Sqlite3.prepare db \"SELECT * FROM users WHERE name = '\" ^ q ^ \"'\";;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_postgresql_exec_caret_flags(self):
+        assert self._reg(
+            'Postgresql.exec conn "UPDATE accounts SET balance = " ^ amt;;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysql_exec_caret_flags(self):
+        assert self._reg(
+            'Mysql.exec db "INSERT INTO logs VALUES (" ^ payload ^ ")";;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_let_assign_caret_flags(self):
+        assert self._reg(
+            'let sql = "DELETE FROM sessions WHERE sid = " ^ sid in\n'
+            "run_db db sql;;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg('Sqlite3.exec db "SELECT * FROM users";;\n') == []
+
+    def test_placeholder_is_quiet(self):
+        assert self._reg(
+            'Sqlite3.exec db "SELECT * FROM orders WHERE uid = ?" [uid];;\n'
+        ) == []
+
+    def test_bound_variable_is_quiet(self):
+        assert self._reg(
+            'let sql = "SELECT * FROM users" in\nSqlite3.exec db sql;;\n'
+        ) == []
+
+
+class TestOcamlShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ml", code)]
+
+    def test_sys_command_caret_flags(self):
+        assert self._reg(
+            'Sys.command ("rm -rf /tmp/" ^ folder);;\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_open_process_in_caret_flags(self):
+        assert self._reg(
+            'Unix.open_process_in ("grep " ^ pattern ^ " /var/log/messages");;\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_sys_command_is_quiet(self):
+        assert self._reg('Sys.command "ls -l /var/log";;\n') == []
+
+    def test_static_open_process_in_is_quiet(self):
+        assert self._reg(
+            'Unix.open_process_in "grep -c error /var/log/messages";;\n'
+        ) == []
+
+    def test_command_built_from_variable_is_quiet(self):
+        # `^` following a variable (not a string literal) is not in-line taint.
+        assert self._reg(
+            'let dynamic_cmd = "/bin/ls" in\n'
+            'Sys.command (dynamic_cmd ^ " -l /var/log");;\n'
+        ) == []
+
