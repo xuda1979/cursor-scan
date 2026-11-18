@@ -2549,3 +2549,91 @@ class TestElixirShellConcat:
             "System.cmd(\"ls\", [dir])\n"
         ) == []
 
+
+class TestErlangSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.erl", code)]
+
+    def test_ejabberd_sql_query_concat_flags(self):
+        assert self._reg(
+            'ejabberd_sql:query(conn, "SELECT * FROM users WHERE id = " ++ Uid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_emysql_execute_concat_flags(self):
+        assert self._reg(
+            'emysql:execute(conn, "DELETE FROM logs WHERE id = " ++ Lid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_epgsql_equery_concat_flags(self):
+        assert self._reg(
+            "epgsql:equery(conn, 'UPDATE t SET v = ' ++ Val)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysql_query_concat_flags(self):
+        assert self._reg(
+            'mysql:query(conn, "SELECT * FROM books WHERE isbn = " ++ Isbn)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_io_lib_format_sql_flags(self):
+        assert self._reg(
+            'mysql:query(conn, io_lib:format("INSERT INTO books (isbn) VALUES (~s)", [Isbn]))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assign_concat_flags(self):
+        assert self._reg(
+            'Q1 = ejabberd_sql:query(B, "SELECT * FROM t WHERE id = " ++ X),\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_placeholder_is_quiet(self):
+        assert self._reg(
+            'ejabberd_sql:query(conn, "SELECT * FROM users WHERE id = ?", [Uid])\n'
+        ) == []
+
+    def test_positional_bind_is_quiet(self):
+        assert self._reg(
+            'epgsql:equery(conn, "UPDATE t SET v = $1", [Val])\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'mysql:query(conn, "SELECT COUNT(*) FROM orders")\n'
+        ) == []
+
+    def test_hrl_header_file_gate_works(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.hrl", 'Q = "SELECT * FROM t WHERE id = " ++ X\n')] == [("injection.sql_concat", 1)]
+
+
+class TestErlangShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.erl", code)]
+
+    def test_os_cmd_concat_flags(self):
+        assert self._reg(
+            'os:cmd("ping -c 1 " ++ Host)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_os_cmd_io_lib_format_flags(self):
+        assert self._reg(
+            'os:cmd(io_lib:format("ls ~s", [Dir]))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_open_port_spawn_concat_flags(self):
+        assert self._reg(
+            'open_port({spawn, "cat " ++ Path}, [binary])\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_os_cmd_is_quiet(self):
+        assert self._reg(
+            'ok = os:cmd("printf ok")\n'
+        ) == []
+
+    def test_spawn_executable_is_quiet(self):
+        assert self._reg(
+            'open_port({spawn_executable, "/bin/ping"}, [binary])\n'
+        ) == []
+
+    def test_non_tainted_os_cmd_is_quiet(self):
+        assert self._reg(
+            'os:cmd("mkdir -p /tmp")\n'
+        ) == []
+

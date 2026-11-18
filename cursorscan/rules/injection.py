@@ -747,6 +747,40 @@ RE_SHELL_CONCAT_EX = re.compile(
     re.I,
 )
 
+# Erlang (.erl / .hrl): the signature taint is a `++`-concatenated or
+# io_lib:format-`~s`-built query string fed to the ejabberd_sql / emysql /
+# epgsql / mysql clients (plus the `Query = ...` assignment build consumed by a
+# DB call on a later line), and an os:cmd / open_port({spawn, ...}) command
+# string built with `++` or a `~s` format placeholder.  Argument lists,
+# `?` placeholders, the `{spawn_executable, ...}` form and static literals
+# stay quiet.
+RE_SQL_CONCAT_ERL = re.compile(
+    r"\b(?:ejabberd_sql:(?:query|sql_query)|emysql:(?:execute|fetch)|"
+    + r"epgsql:(?:equery|query)|mysql:(?:fetch|query))\s*\(\s*(?:[^,]+,\s*)?(?:"
+    + r"(?:" + _SQL_STR + r")\s*\+\+"
+    + r"|io_lib:format\s*\(\s*[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*~[swp]"
+    + r")",
+    re.I,
+)
+RE_SQL_CONCAT_ERL_ASSIGN = re.compile(
+    r"^\s*[A-Za-z_]\w*\s*=\s*(?:"
+    + r"(?:" + _SQL_STR + r")\s*\+\+"
+    + r"|io_lib:format\s*\(\s*[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*~[swp]"
+    + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_ERL = re.compile(
+    r"os:cmd\s*\(\s*(?:"
+    + r"[\"'][^\"']*[\"']\s*\+\+"
+    + r"|io_lib:format\s*\(\s*[\"'][^\"']*~[swp][^\"']*[\"']"
+    + r")"
+    + r"|open_port\s*\(\s*\{\s*spawn\s*,\s*(?:"
+    + r"[\"'][^\"']*[\"']\s*\+\+"
+    + r"|io_lib:format\s*\(\s*[\"'][^\"']*~[swp][^\"']*[\"']"
+    + r")",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -775,6 +809,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     dart_ext = ext == "dart"
     m_ext = ext in ("m", "mm")
     ex_ext = ext in ("ex", "exs")
+    erl_ext = ext in ("erl", "hrl")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -963,6 +998,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
         if ex_ext and RE_SHELL_CONCAT_EX.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if erl_ext and (RE_SQL_CONCAT_ERL.search(line) or RE_SQL_CONCAT_ERL_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if erl_ext and RE_SHELL_CONCAT_ERL.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

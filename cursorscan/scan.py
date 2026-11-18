@@ -51,7 +51,7 @@ TEXT_EXTS = {
     ".rb", ".php", ".go", ".rs", ".java", ".kt", ".sh", ".bash", ".zsh", ".pl",
     ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".ps1", ".sql",
     ".vb", ".scala", ".groovy", ".gradle", ".dart", ".m", ".mm", ".ex", ".exs",
-    ".vue",
+    ".erl", ".hrl", ".vue",
     ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
     ".tf", ".cfg", ".conf",
 }
