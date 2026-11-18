@@ -571,6 +571,40 @@ RE_SHELL_CONCAT_VB = re.compile(
     r"|\.Arguments\s*=\s*" + _RE_ARG + r"\s*[&+]",
     re.I,
 )
+# Scala (.scala): the JVM language whose signature taint is string
+# interpolation -- s"..." / f"..." templates expanding `$var` / `${expr}` --
+# or `+` concatenation feeding JDBC receivers (executeQuery / executeUpdate /
+# execute / prepareStatement), plus the `val query = ...` assignment build
+# whose driver call sits on a later line (line-anchored).  scala.sys.process
+# shell forms: Process("cmd " + arg) / Process(s"cmd $var") and the Java
+# interop Runtime.getRuntime().exec("cmd " + arg).  Bound `?`/`@id`
+# placeholders, static literals and Seq(...) argument-list Process launches
+# stay quiet.
+RE_SQL_CONCAT_SCALA = re.compile(
+    r"\.(?:execute(?:Query|Update|LargeUpdate)?|prepareStatement|createQuery)\s*\(\s*(?:"
+    r"[sf]?\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$[{\w]"
+    r"|(?:" + _SQL_STR + r")\s*\+"
+    r")",
+    re.I,
+)
+# Line-anchored assignment form: `val query = "SELECT ... " + id` or
+# `val q = s"SELECT ... $name"` where a JDBC call consumes it later.
+RE_SQL_CONCAT_SCALA_ASSIGN = re.compile(
+    r"^\s*(?:val|var)\s+[A-Za-z_]\w*\s*=\s*(?:"
+    r"[sf]?\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$[{\w]"
+    r"|(?:" + _SQL_STR + r")\s*\+"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_SCALA = re.compile(
+    r"Runtime\.getRuntime\(\)\.exec\s*\(\s*(?:\"[^\"]*\"|'[^']*')\s*\+"
+    r"|\bProcess\s*\(\s*(?:"
+    r"(?:s|f|raw)?\"[^\"]*\$[{\w]"
+    r"|\"[^\"]*\"\s*\+"
+    r"|'[^']*'\s*\+"
+    r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -595,6 +629,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     ps1_ext = ext == "ps1"
     sql_ext = ext == "sql"
     vb_ext = ext == "vb"
+    scala_ext = ext == "scala"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -734,6 +769,17 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (@参数)"))
         if vb_ext and RE_SHELL_CONCAT_VB.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Scala: s/f-interpolated ($var / ${expr}) or `+`-concatenated query
+        # strings into JDBC / Hibernate receivers (plus the val query =
+        # assignment form), and scala.sys.process Process / Java Runtime
+        # exec with an interpolated or concatenated command string.
+        if scala_ext and (RE_SQL_CONCAT_SCALA.search(line)
+                          or RE_SQL_CONCAT_SCALA_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if scala_ext and RE_SHELL_CONCAT_SCALA.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

@@ -2001,3 +2001,95 @@ class TestVbShellConcat:
             "psi.ArgumentList.Add(src)\n"
             "process.Start(psi)\n"
         ) == []
+
+
+class TestScalaSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.scala", code)]
+
+    def test_executequery_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.executeQuery(\"SELECT * FROM users WHERE id = \" + uid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_executeupdate_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.executeUpdate(\"DELETE FROM logs WHERE id = \" + lid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_preparestatement_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.prepareStatement(\"UPDATE accounts SET owner = '\" + owner + \"'\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_interpolated_string_flags(self):
+        assert self._reg(
+            "stmt.execute(s\"UPDATE t SET v = '$value' WHERE id = $value\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_interpolated_curly_expr_flags(self):
+        assert self._reg(
+            "stmt.executeQuery(s\"SELECT * FROM t WHERE id = ${uid}\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_val_assignment_plus_concat_flags(self):
+        assert self._reg(
+            "val q = \"SELECT * FROM books WHERE isbn = \" + isbn\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_val_assignment_interpolated_flags(self):
+        assert self._reg(
+            "val q = s\"SELECT * FROM users WHERE name = $name\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            "val stmt = conn.prepareStatement(\"SELECT * FROM users WHERE id = ?\")\n"
+            "stmt.setInt(1, id)\n"
+            "stmt.executeQuery()\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "stmt.executeQuery(\"SELECT COUNT(*) FROM users\")\n"
+        ) == []
+
+    def test_slick_interpolator_is_quiet(self):
+        assert self._reg(
+            "val q = sql\"SELECT * FROM users WHERE id = $id\"\n"
+        ) == []
+
+
+class TestScalaShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.scala", code)]
+
+    def test_process_interpolated_flags(self):
+        assert self._reg(
+            "Process(s\"ping -c 1 $host\").!\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_plus_concat_flags(self):
+        assert self._reg(
+            "Process(\"cmd /c \" + cmd).!\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_single_quote_concat_flags(self):
+        assert self._reg(
+            "Process('sh -c ' + cmd).!\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_runtime_exec_plus_concat_flags(self):
+        assert self._reg(
+            "Runtime.getRuntime().exec(\"cmd /c \" + cmd)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_launch_is_quiet(self):
+        assert self._reg(
+            "Process(\"ping\", Seq(\"-c\", \"1\", host)).!\n"
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            "Process(\"git status\").!\n"
+        ) == []
