@@ -3280,3 +3280,54 @@ class TestCfmShellConcat:
             'CfExecute("cmd.exe /c cls")\n'
         ) == []
 
+
+class TestTclSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.tcl", code)]
+
+    def test_db_eval_interp_flags(self):
+        assert self._reg('db eval "SELECT * FROM orders WHERE uid = $uid"\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_db_prepare_interp_flags(self):
+        assert self._reg(
+            'set stmt [db prepare "UPDATE accounts SET balance = $amt '
+            'WHERE id = $id"]\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_set_assign_interp_flags(self):
+        assert self._reg('set sql "DELETE FROM sessions WHERE sid = $sid"\n'
+                         ) == [("injection.sql_concat", 1)]
+
+    def test_braced_literal_is_quiet(self):
+        assert self._reg(
+            'db eval {SELECT * FROM users WHERE uid = $uid}\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg('db eval "SELECT * FROM users"\n') == []
+
+    def test_placeholder_is_quiet(self):
+        assert self._reg(
+            'db eval "SELECT * FROM orders WHERE uid = ?" [list $uid]\n'
+        ) == []
+
+
+class TestTclShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.tcl", code)]
+
+    def test_exec_interp_flags(self):
+        assert self._reg('exec echo "hello $name"\n'
+                         ) == [("injection.shell_concat", 1)]
+
+    def test_open_pipe_interp_flags(self):
+        assert self._reg('open "| grep $pattern /var/log/messages"\n'
+                         ) == [("injection.shell_concat", 1)]
+
+    def test_static_exec_is_quiet(self):
+        assert self._reg('exec ls -l /var/log\n') == []
+
+    def test_static_open_pipe_is_quiet(self):
+        assert self._reg('open "| grep error /var/log/messages"\n') == []
+

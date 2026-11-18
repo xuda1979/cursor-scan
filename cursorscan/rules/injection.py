@@ -973,6 +973,29 @@ RE_SHELL_CONCAT_CFM = re.compile(
     re.I,
 )
 
+# Tcl (.tcl): double-quoted strings substitute `$var`, so a `$` interpolation
+# inside a quoted SQL literal is tainted -- both `db eval "SELECT ... $id"`
+# / `[db prepare "... $id"]` call sites on the SQLite Tcl interface (eval /
+# prepare / allrows / onecolumn / exists) and `set sql = "... $id"` assignment
+# builds consumed on a later line.  Braced `{...}` literals never substitute,
+# and bound `?` placeholders passed as separate arguments stay quiet, so both
+# are excluded.  The shell sinks are `exec <cmd> ... $var` command lists and
+# `open "| <filter> $var"` pipe subprocesses.
+RE_SQL_CONCAT_TCL = re.compile(
+    r"\b[$\w]+\s+(?:eval|allrows|onecolumn|exists|prepare)\s+[\"'][^\"']*"
+    + _SQL_KW + r"[^\"']*\$[^\"']*[\"']",
+    re.I,
+)
+RE_SQL_CONCAT_TCL_ASSIGN = re.compile(
+    r'^\s*set\s+\w+\s+"[^"]*' + _SQL_KW + r'[^"]*\$[^"]*"\s*$',
+    re.I,
+)
+RE_SHELL_CONCAT_TCL = re.compile(
+    r"\bexec\s+[^\n]*\$"
+    + r"|\bopen\s+[\"']?\|\s*[\"']?[^\n]*\$",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1009,6 +1032,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     pas_ext = ext in ("pas", "pp", "dpr")
     vbs_ext = ext in ("vbs", "asp")
     cfm_ext = ext in ("cfm", "cfc")
+    tcl_ext = ext == "tcl"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1245,6 +1269,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用 <cfqueryparam> 参数化查询"))
         if cfm_ext and RE_SHELL_CONCAT_CFM.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if tcl_ext and (RE_SQL_CONCAT_TCL.search(line) or RE_SQL_CONCAT_TCL_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用 ? 占位符参数化查询"))
+        if tcl_ext and RE_SHELL_CONCAT_TCL.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
