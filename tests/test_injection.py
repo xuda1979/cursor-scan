@@ -41,6 +41,12 @@ and Clojure (`(str ...)` / `(format ...)`-built SQL literals into
 receivers plus `def`/`let` assignment builds, and `clojure.java.shell/sh` /
 `shell/sh` / bare `sh` fed a `(str ...)`- or `(format ...)`-built command
 string; `?`-placeholder vector binds and static argument lists stay quiet)
+and F# (`sprintf`-built (`%s`/`%d`/`%f`-verb) or `+`-concatenated SQL
+literals into ADO.NET `new SqlCommand(...)` / `.CommandText <-` receivers
+plus `let sql = ...` assignment builds, and `Process.Start` /
+`StartInfo.Arguments <-` fed a `sprintf`-built or `+`-concatenated command
+string; `@id` / `?` placeholders with `Parameters.AddWithValue(...)` and
+static command lines stay quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -2961,5 +2967,90 @@ class TestClojureShellConcat:
     def test_arg_list_process_quiet(self):
         assert self._reg(
             'readProcess "ls" ["-la", "/tmp"] ""\n'
+        ) == []
+
+
+class TestFsSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.fs", code)]
+
+    def test_sqlcommand_sprintf_flags(self):
+        assert self._reg(
+            'let cmd = new SqlCommand(sprintf "SELECT * FROM users WHERE id = %s" id, conn)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlcommand_plus_concat_flags(self):
+        assert self._reg(
+            'new SqlCommand("UPDATE accounts SET balance = " + string amt, conn)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlcommand_printfn_named_flags(self):
+        assert self._reg(
+            'let cmd = new SqlCommand(sprintf "DELETE FROM sessions WHERE sid = %s" sid, conn)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_sprintf_flags(self):
+        assert self._reg(
+            'cmd.CommandText <- sprintf "DELETE FROM sessions WHERE sid = %s" sid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_plus_concat_flags(self):
+        assert self._reg(
+            'cmd.CommandText <- "DELETE FROM orders WHERE uid = " + uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_let_assignment_sprintf_builds_flags(self):
+        assert self._reg(
+            'let sql = sprintf "SELECT * FROM orders WHERE uid = %s" uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_bound_placeholder_at_is_quiet(self):
+        assert self._reg(
+            'let cmd = new SqlCommand("SELECT * FROM users WHERE id = @id", conn)\n'
+        ) == []
+
+    def test_qmark_placeholder_is_quiet(self):
+        assert self._reg(
+            'let cmd = new SqlCommand("UPDATE accounts SET balance = ?", conn)\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'new SqlCommand("SELECT 1", conn)\n'
+        ) == []
+
+    def test_sprintf_without_receiver_is_quiet(self):
+        assert self._reg(
+            'let s = sprintf "Hello %s" name\n'
+        ) == []
+
+
+class TestFsShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.fs", code)]
+
+    def test_process_start_plus_flags(self):
+        assert self._reg(
+            'Process.Start("ls -la " + dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_sprintf_flags(self):
+        assert self._reg(
+            'Process.Start(sprintf "cat %s" file)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_startinfo_arguments_plus_flags(self):
+        assert self._reg(
+            'psi.Arguments <- "ping -c 1 " + host\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            'Process.Start("ls", "-la", dir)\n'
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'Process.Start("cat", file)\n'
         ) == []
 

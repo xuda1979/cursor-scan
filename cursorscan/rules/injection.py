@@ -862,6 +862,38 @@ RE_SHELL_CONCAT_CLJ = re.compile(
     re.I,
 )
 
+# F# (.fs / .fsi / .fsx): the signature taint is a `sprintf`-built
+# (`%s`/`%d`/`%f`-verb) or `+`-concatenated query string fed to an ADO.NET
+# `SqlCommand(...)` / `.CommandText <-` receiver (or a `let sql = ...`
+# assignment build consumed by a DB call on a later line), and a sprintf-built
+# or `+`-concatenated command string fed to `System.Diagnostics.Process.Start`
+# / `ProcessStartInfo.Arguments <-`.  Bound `@id` / `?` placeholders with
+# Parameters.AddWithValue and static command lines stay quiet.
+_RE_FS_SPRINTF = r'sprintf\s+"[^"]*(?:' + _SQL_KW + r')[^"]*%[sdbfxoaA]'
+RE_SQL_CONCAT_FS = re.compile(
+    r"\b\w*Command\s*\(\s*(?:"
+    + _RE_FS_SPRINTF
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")"
+    + r"|\.CommandText\s*<-\s*(?:"
+    + _RE_FS_SPRINTF
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")",
+    re.I,
+)
+RE_SQL_CONCAT_FS_ASSIGN = re.compile(
+    r"^\s*let\s+[A-Za-z_]\w*\s*=\s*(?:"
+    + _RE_FS_SPRINTF
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_FS = re.compile(
+    r"\bProcess\.Start\s*\(\s*(?:\"[^\"]*\"\s*\+|'[^']*'\s*\+|sprintf\s+\"[^\"]*%[sdbfxoaA])"
+    + r"|\.Arguments\s*<-\s*(?:\"[^\"]*\"\s*\+|'[^']*'\s*\+|sprintf\s+\"[^\"]*%[sdbfxoaA])",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -894,6 +926,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     jl_ext = ext == "jl"
     hs_ext = ext in ("hs", "lhs")
     clj_ext = ext in ("clj", "cljs", "cljc")
+    fs_ext = ext in ("fs", "fsi", "fsx")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1106,6 +1139,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if clj_ext and RE_SHELL_CONCAT_CLJ.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if fs_ext and (RE_SQL_CONCAT_FS.search(line) or RE_SQL_CONCAT_FS_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (@参数)"))
+        if fs_ext and RE_SHELL_CONCAT_FS.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
