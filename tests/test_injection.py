@@ -54,6 +54,12 @@ plus `sql := ...` assignment builds, and `ShellExecute` / `WinExec` /
 `CreateProcess` fed a `+`-concatenated or `Format`-built command string;
 `:id` placeholders with `Parameters.ParamByName(...)` and static command
 lines stay quiet)
+and VBScript / classic ASP (`.vbs`/`.asp`: `&`-concatenated SQL literals
+into ADODB `conn.Execute` / `rs.Open` receivers and `.CommandText =`
+assignments plus `xxx = ...` assignment builds, and `WScript.Shell`
+`.Run` / `.Exec` or the classic `Shell()` helper fed a `&`/`+`-
+concatenated command string; `?` placeholder ADODB parameter arrays and
+static command lines stay quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -3136,4 +3142,75 @@ class TestPasShellConcat:
         assert self._reg(
             "CreateProcess(nil, PChar('cmd.exe /c cls'), nil, nil, False,\n"
         ) == []
+
+
+class TestVbsSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vbs", code)]
+
+    def test_conn_execute_paren_amp_flags(self):
+        assert self._reg(
+            'conn.Execute("SELECT * FROM users WHERE id = " & id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_execute_bare_amp_flags(self):
+        assert self._reg(
+            'conn.Execute "UPDATE accounts SET balance = " & amt\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_amp_flags(self):
+        assert self._reg(
+            'cmd.CommandText = "DELETE FROM orders WHERE uid = " & uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_rs_open_amp_flags(self):
+        assert self._reg(
+            'rs.Open "SELECT * FROM orders WHERE uid = " & uid, conn\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_build_amp_flags(self):
+        assert self._reg(
+            'sql = "DELETE FROM sessions WHERE sid = " & sid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_bound_param_is_quiet(self):
+        assert self._reg(
+            'cmd.CommandText = "SELECT * FROM users WHERE id = ?"\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'conn.Execute "SELECT * FROM users WHERE active = 1"\n'
+        ) == []
+
+
+class TestVbsShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vbs", code)]
+
+    def test_wsh_run_amp_flags(self):
+        assert self._reg(
+            'sh.Run "cmd.exe /c dir " & dir, 0, False\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_wsh_exec_amp_flags(self):
+        assert self._reg(
+            'sh.Exec "ping -n 1 " & host\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_helper_amp_flags(self):
+        assert self._reg(
+            'Shell "net session " & sid\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'sh.Run "cmd.exe /c cls", 0, True\n'
+        ) == []
+
+    def test_static_exec_is_quiet(self):
+        assert self._reg(
+            'sh.Exec "cmd.exe /c dir C:\\"\n'
+        ) == []
+
 

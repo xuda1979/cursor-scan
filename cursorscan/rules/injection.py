@@ -923,6 +923,31 @@ RE_SHELL_CONCAT_PAS = re.compile(
     re.I,
 )
 
+# VBScript / classic ASP (.vbs / .asp): the `&` operator (VBScript string
+# concatenation; `+` also joins) glues a runtime value onto a SQL-keyword
+# literal fed into ADODB receivers -- conn.Execute("SELECT ... " & id) /
+# conn.Execute "UPDATE ... " & amt / rs.Open / .CommandText assignment -- plus
+# the `xxx = "SELECT ... " & id` assignment build consumed on a later line,
+# and a `&`/`+`-concatenated command string fed to WScript.Shell .Run / .Exec
+# or the classic-ASP Shell() helper.  Parameterized placeholders and static
+# literals stay quiet.
+RE_SQL_CONCAT_VBS = re.compile(
+    r"\b\w+\.(?:Execute|Open)\b\s*\(?\s*"
+    + r"(?:" + _SQL_STR + r")\s*[&+]"
+    + r"|\.CommandText\s*=\s*(?:" + _SQL_STR + r")\s*[&+]",
+    re.I,
+)
+RE_SQL_CONCAT_VBS_ASSIGN = re.compile(
+    r"^\s*(?:Set\s+)?[A-Za-z_]\w*\s*=\s*"
+    + r"(?:" + _SQL_STR + r")\s*[&+]",
+    re.I,
+)
+RE_SHELL_CONCAT_VBS = re.compile(
+    r"\.(?:Run|Exec)\s*(?:\(\s*" + _RE_ARG + r"|" + _RE_ARG + r")\s*[&+]"
+    + r"|\bShell\s*(?:\(\s*" + _RE_ARG + r"|" + _RE_ARG + r")\s*[&+]",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -957,6 +982,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     clj_ext = ext in ("clj", "cljs", "cljc")
     fs_ext = ext in ("fs", "fsi", "fsx")
     pas_ext = ext in ("pas", "pp", "dpr")
+    vbs_ext = ext in ("vbs", "asp")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1181,6 +1207,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (:参数)"))
         if pas_ext and RE_SHELL_CONCAT_PAS.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if vbs_ext and (RE_SQL_CONCAT_VBS.search(line) or RE_SQL_CONCAT_VBS_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if vbs_ext and RE_SHELL_CONCAT_VBS.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
