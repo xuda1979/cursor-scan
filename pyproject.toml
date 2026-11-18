@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "Local security-debt scanner for vibe-coded projects: rule engine (weak crypto / secrets / deserialization / injection / permissions), scorecard, CLI gate and SARIF output."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-only" }
 authors = [{ name = "Cursor-Scan" }]
 keywords = ["security", "scanner", "static-analysis", "sarif", "audit"]
 classifiers = [
