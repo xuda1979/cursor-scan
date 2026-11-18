@@ -635,6 +635,40 @@ RE_SHELL_CONCAT_GROOVY = re.compile(
     r"|\"[^\"]*\$[{\w][^\"]*\"\s*\.execute\s*\(",
     re.I,
 )
+# Dart (.dart): the Flutter/VM language whose signature taint is string
+# interpolation -- "..."/$var and ${expr} templates (no prefix letter, like
+# Groovy) -- or `+` concatenation feeding sqflite / postgres-style receivers
+# (rawQuery / rawInsert / rawUpdate / rawDelete / execute / query), plus the
+# `final q = ...` / `var q = ...` / `String sql = ...` assignment build.
+# Dart shell forms: dart:io Process.run / Process.start with an interpolated
+# or `+`-concatenated command string.  Bound `?` placeholders, `$1`-style
+# positional placeholders, static literals, arg-list Process launches and the
+# `db.query(where: ...)` builder form stay quiet.
+_LITERAL = r"(?:\"[^\"]*\"|'[^']*')"
+_TMPL = r"\$(?:[A-Za-z_]\w*|\{[^}]*\})"
+RE_SQL_CONCAT_DART = re.compile(
+    r"\.(?:rawQuery|rawInsert|rawUpdate|rawDelete|execute|query)\s*\(\s*(?:"
+    + r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*" + _TMPL
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")",
+    re.I,
+)
+# Line-anchored assignment form: `final q = "SELECT ... " + id` or
+# `var q = "SELECT ... WHERE name = $name"` consumed by a DB call later.
+RE_SQL_CONCAT_DART_ASSIGN = re.compile(
+    r"^\s*(?:(?:final|var|const)\s+)?(?:String\s+)?[A-Za-z_]\w*\s*=\s*(?:"
+    + r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*" + _TMPL
+    + r"|(?:" + _SQL_STR + r")\s*\+"
+    + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_DART = re.compile(
+    r"Process\.(?:run|start)\s*\(\s*(?:"
+    + r"" + _LITERAL + r"\s*\+"
+    + r"|[\"'][^\"']*" + _TMPL + r"[^\"']*[\"'](?:\s*[,\)])"
+    + r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -661,6 +695,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     vb_ext = ext == "vb"
     scala_ext = ext == "scala"
     groovy_ext = ext in ("groovy", "gradle")
+    dart_ext = ext == "dart"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -822,6 +857,17 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if groovy_ext and RE_SHELL_CONCAT_GROOVY.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Dart: interpolated ($var / ${expr}) or `+`-concatenated query strings
+        # into sqflite / postgres-style receivers (plus the final/var/String
+        # assignment form), and dart:io Process.run / Process.start with an
+        # interpolated or concatenated command string.
+        if dart_ext and (RE_SQL_CONCAT_DART.search(line)
+                         or RE_SQL_CONCAT_DART_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if dart_ext and RE_SHELL_CONCAT_DART.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

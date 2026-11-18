@@ -2192,3 +2192,109 @@ class TestGroovyShellConcat:
         assert self._reg(
             "\"ls\".execute()\n"
         ) == []
+
+
+class TestDartSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.dart", code)]
+
+    def test_raw_query_interpolated_flags(self):
+        assert self._reg(
+            "db.rawQuery(\"SELECT * FROM users WHERE id = ${uid}\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_delete_concat_flags(self):
+        assert self._reg(
+            "db.rawDelete(\"DELETE FROM logs WHERE id = \" + lid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_update_concat_flags(self):
+        assert self._reg(
+            "db.rawUpdate(\"UPDATE t SET v = 1 WHERE id = \" + tid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_insert_concat_flags(self):
+        assert self._reg(
+            "db.rawInsert(\"INSERT INTO logs VALUES (\" + payload + \")\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_interpolated_flags(self):
+        assert self._reg(
+            "conn.execute(\"SELECT * FROM t WHERE name = $name\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_single_quoted_interpolated_flags(self):
+        assert self._reg(
+            "conn.execute('SELECT * FROM t WHERE id = ${uid}')\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_final_assignment_concat_flags(self):
+        assert self._reg(
+            "final q = \"SELECT * FROM books WHERE isbn = \" + isbn\n"
+            "db.rawQuery(q)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_var_assignment_interpolated_flags(self):
+        assert self._reg(
+            "var q = \"SELECT * FROM users WHERE name = $name\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_assignment_interpolated_flags(self):
+        assert self._reg(
+            "String sql = 'SELECT id FROM t WHERE uid = ${uid}'\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_question_mark_placeholder_is_quiet(self):
+        assert self._reg(
+            "db.rawQuery(\"SELECT * FROM users WHERE id = ?\", whereArgs: [uid])\n"
+        ) == []
+
+    def test_postgres_positional_placeholder_is_quiet(self):
+        assert self._reg(
+            "conn.execute(\"SELECT * FROM t WHERE id = $1\", [id])\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "db.rawQuery(\"SELECT COUNT(*) FROM orders\")\n"
+        ) == []
+
+    def test_query_builder_form_is_quiet(self):
+        assert self._reg(
+            "db.query(\"users\", where: \"id = ?\", whereArgs: [id])\n"
+        ) == []
+
+
+class TestDartShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.dart", code)]
+
+    def test_process_run_interpolated_flags(self):
+        assert self._reg(
+            "Process.run(\"ping -c 1 ${host}\")\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_run_dollar_flags(self):
+        assert self._reg(
+            "Process.run('cmd /c $cmd', runInShell: true)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_run_concat_flags(self):
+        assert self._reg(
+            "Process.run(\"sh -c \" + script)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_start_concat_flags(self):
+        assert self._reg(
+            "Process.start(\"git log \" + ref)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_process_is_quiet(self):
+        assert self._reg(
+            "Process.run(\"ping\", [\"-c\", \"1\", host])\n"
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            "Process.run(\"ls\")\n"
+        ) == []
