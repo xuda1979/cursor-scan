@@ -2752,3 +2752,103 @@ class TestJuliaShellConcat:
             "out = read(`echo ok`)\n"
         ) == []
 
+
+class TestHaskellSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.hs", code)]
+
+    def test_pg_exec_concat_flags(self):
+        assert self._reg(
+            'exec conn "SELECT * FROM users WHERE id = " ++ uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite_exec_concat_flags(self):
+        assert self._reg(
+            'exec conn2 "UPDATE accounts SET balance = " ++ show amt\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_query_concat_flags(self):
+        assert self._reg(
+            'query_ conn3 "DELETE FROM sessions WHERE lid = " ++ lid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_raw_sql_concat_flags(self):
+        assert self._reg(
+            'rawSql conn4 "SELECT * FROM orders WHERE uid = " ++ name\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_run_sql_raw_concat_flags(self):
+        assert self._reg(
+            'runSqlRaw "SELECT * FROM users WHERE name = " ++ name\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_let_assignment_concat_flags(self):
+        assert self._reg(
+            'let sql = "SELECT * FROM users WHERE id = " ++ uid in query conn sql\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_concat_flags(self):
+        assert self._reg(
+            'sql = "DELETE FROM x WHERE id = " ++ uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_placeholder_params_is_quiet(self):
+        assert self._reg(
+            'exec conn ("SELECT * FROM users WHERE id = ?") [uid]\n'
+        ) == []
+
+    def test_named_placeholder_is_quiet(self):
+        assert self._reg(
+            'execute conn "SELECT * FROM users WHERE id = ?" (Only uid)\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'exec conn "SELECT * FROM users"\n'
+        ) == []
+
+    def test_parameterized_assignment_quiet(self):
+        assert self._reg(
+            'sql = "SELECT * FROM users WHERE id = ?"\n'
+        ) == []
+
+
+class TestHaskellShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.hs", code)]
+
+    def test_call_command_concat_flags(self):
+        assert self._reg(
+            'callCommand ("ls " ++ dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_run_command_concat_flags(self):
+        assert self._reg(
+            'runCommand ("cat " ++ file)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_concat_flags(self):
+        assert self._reg(
+            'system ("rm -rf " ++ path)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_concat_flags(self):
+        assert self._reg(
+            'shell ("ping " ++ host)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_quiet(self):
+        assert self._reg(
+            'callCommand ("ls -la /tmp")\n'
+        ) == []
+
+    def test_static_system_quiet(self):
+        assert self._reg(
+            'system "mkdir -p /tmp/app"\n'
+        ) == []
+
+    def test_arg_list_process_quiet(self):
+        assert self._reg(
+            'readProcess "ls" ["-la", "/tmp"] ""\n'
+        ) == []
+
