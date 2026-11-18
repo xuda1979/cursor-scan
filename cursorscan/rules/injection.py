@@ -605,6 +605,36 @@ RE_SHELL_CONCAT_SCALA = re.compile(
     r")",
     re.I,
 )
+# Groovy (.groovy / .gradle): the JVM scripting language whose signature taint
+# is the GString -- double-quoted "..." templates expanding `$var` / `${expr}` --
+# or `+` concatenation feeding JDBC receivers (executeQuery / executeUpdate /
+# execute / executeInsert / prepareStatement), plus the `def q = ...` assignment
+# build.  Groovy shell forms: string templates / `+` concat used through
+# `.execute()` (groovy 时 java.lang.Process) or the Java interop
+# Runtime.getRuntime().exec("cmd " + arg).  Bound `?` placeholders, static
+# literals and list/array argument forms (["ping", host].execute()) stay quiet.
+RE_SQL_CONCAT_GROOVY = re.compile(
+    r"\.(?:execute(?:Query|Update|Insert)?|prepareStatement)\s*\(\s*(?:"
+    r"\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$[{\w]"
+    r"|(?:" + _SQL_STR + r")\s*\+"
+    r")",
+    re.I,
+)
+# Line-anchored assignment form: `def q = "SELECT ... " + id` or
+# `def q = "SELECT ... WHERE name = $name"` consumed by a JDBC call later.
+RE_SQL_CONCAT_GROOVY_ASSIGN = re.compile(
+    r"^\s*(?:def|final|var|String)?\s*[A-Za-z_]\w*\s*=\s*(?:"
+    r"\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$[{\w]"
+    r"|(?:" + _SQL_STR + r")\s*\+"
+    r")",
+    re.I,
+)
+RE_SHELL_CONCAT_GROOVY = re.compile(
+    r"Runtime\.getRuntime\(\)\.exec\s*\(\s*(?:\"[^\"]*\"|'[^']*')\s*\+"
+    r"|\(\s*(?:\"[^\"]*\"|'[^']*')\s*\+[^)]*\)\s*\.execute\s*\("
+    r"|\"[^\"]*\$[{\w][^\"]*\"\s*\.execute\s*\(",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -630,6 +660,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     sql_ext = ext == "sql"
     vb_ext = ext == "vb"
     scala_ext = ext == "scala"
+    groovy_ext = ext in ("groovy", "gradle")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -780,6 +811,17 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if scala_ext and RE_SHELL_CONCAT_SCALA.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        # Groovy: GString ($var / ${expr}) or `+`-concatenated query strings into
+        # JDBC receivers (plus the `def q = ...` assignment form), and string
+        # `.execute()` / Java Runtime exec with an interpolated/concatenated
+        # command string.
+        if groovy_ext and (RE_SQL_CONCAT_GROOVY.search(line)
+                           or RE_SQL_CONCAT_GROOVY_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if groovy_ext and RE_SHELL_CONCAT_GROOVY.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

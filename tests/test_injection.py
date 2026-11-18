@@ -2093,3 +2093,102 @@ class TestScalaShellConcat:
         assert self._reg(
             "Process(\"git status\").!\n"
         ) == []
+
+
+class TestGroovySqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.groovy", code)]
+
+    def test_executequery_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.executeQuery(\"SELECT * FROM users WHERE id = \" + uid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_executeupdate_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.executeUpdate(\"DELETE FROM logs WHERE id = \" + lid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_executeinsert_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.executeInsert(\"INSERT INTO logs(body) VALUES ('\" + body + \"')\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_preparestatement_plus_concat_flags(self):
+        assert self._reg(
+            "stmt.prepareStatement(\"UPDATE accounts SET owner = '\" + owner + \"'\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_interpolated_string_flags(self):
+        assert self._reg(
+            "stmt.execute(\"UPDATE t SET v = '$value' WHERE id = $value\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_interpolated_curly_expr_flags(self):
+        assert self._reg(
+            "stmt.executeQuery(\"SELECT * FROM t WHERE id = ${uid}\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_def_assignment_plus_concat_flags(self):
+        assert self._reg(
+            "def q = \"SELECT * FROM books WHERE isbn = \" + isbn\n"
+            "stmt.executeQuery(q)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_def_assignment_interpolated_flags(self):
+        assert self._reg(
+            "def q = \"SELECT * FROM users WHERE name = $name\"\n"
+            "stmt.executeQuery(q)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            "def stmt = conn.prepareStatement(\"SELECT * FROM users WHERE id = ?\")\n"
+            "stmt.setLong(1, id)\n"
+            "stmt.executeQuery()\n"
+        ) == []
+
+    def test_static_literal_is_quiet(self):
+        assert self._reg(
+            "stmt.executeQuery(\"SELECT COUNT(*) FROM users\")\n"
+        ) == []
+
+    def test_bound_argument_list_is_quiet(self):
+        assert self._reg(
+            "sql.execute(\"SELECT * FROM users WHERE id = ?\", [id])\n"
+        ) == []
+
+
+class TestGroovyShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.groovy", code)]
+
+    def test_interpolated_execute_flags(self):
+        assert self._reg(
+            "\"ping -c 1 ${host}\".execute()\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_single_dollar_execute_flags(self):
+        assert self._reg(
+            "\"cmd /c $cmd\".execute()\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_paren_plus_concat_execute_flags(self):
+        assert self._reg(
+            "(\"cmd /c \" + cmd).execute()\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_runtime_exec_plus_concat_flags(self):
+        assert self._reg(
+            "Runtime.getRuntime().exec(\"cmd /c \" + cmd)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_execute_is_quiet(self):
+        assert self._reg(
+            "[\"ping\", \"-c\", \"1\", host].execute()\n"
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            "\"ls\".execute()\n"
+        ) == []
