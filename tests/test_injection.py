@@ -36,6 +36,11 @@ plus `Dim sql = ...` assignment builds, and `Process.Start` / `Shell(...)` /
 `CreateObject("WScript.Shell").Run` / `.Arguments=` with a `&`/`+`-
 concatenated command string; `@id` placeholders / `.AddWithValue(...)` and
 static command lines stay quiet)
+and Clojure (`(str ...)` / `(format ...)`-built SQL literals into
+`next.jdbc` / `jdbc/` `execute!` / `execute-one!` / `execute-batch!` / `query`
+receivers plus `def`/`let` assignment builds, and `clojure.java.shell/sh` /
+`shell/sh` / bare `sh` fed a `(str ...)`- or `(format ...)`-built command
+string; `?`-placeholder vector binds and static argument lists stay quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -2845,6 +2850,112 @@ class TestHaskellShellConcat:
     def test_static_system_quiet(self):
         assert self._reg(
             'system "mkdir -p /tmp/app"\n'
+        ) == []
+
+
+class TestClojureSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.clj", code)]
+
+    def test_next_jdbc_execute_bang_str_flags(self):
+        assert self._reg(
+            '(jdbc/execute! conn (str "SELECT * FROM users WHERE id = " id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_next_jdbc_execute_one_bang_str_flags(self):
+        assert self._reg(
+            '(next.jdbc/execute-one! conn (str "UPDATE accounts SET balance = " amt))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_jdbc_query_format_flags(self):
+        assert self._reg(
+            '(jdbc/query conn (format "DELETE FROM sessions WHERE sid = %s" sid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_qualified_next_jdbc_query_flags(self):
+        assert self._reg(
+            '(next.jdbc/query conn (str "SELECT * FROM orders WHERE uid = " uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_bare_execute_bang_flags(self):
+        assert self._reg(
+            '(execute! conn (str "INSERT INTO logs VALUES (\'" note "\')"))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_def_assignment_str_flags(self):
+        assert self._reg(
+            '(def sql (str "SELECT * FROM users WHERE id = " uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_let_assignment_format_flags(self):
+        assert self._reg(
+            '(let [sql (format "DELETE FROM x WHERE id = %s" uid)] (jdbc/query conn sql))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_placeholder_vector_is_quiet(self):
+        assert self._reg(
+            '(jdbc/execute! conn ["SELECT * FROM users WHERE id = ?" id])\n'
+        ) == []
+
+    def test_named_binds_is_quiet(self):
+        assert self._reg(
+            '(jdbc/execute! conn ["UPDATE accounts SET balance = :amt" {:amt amt}])\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            '(jdbc/query conn "SELECT 1")\n'
+        ) == []
+
+    def test_parameterized_def_is_quiet(self):
+        assert self._reg(
+            '(def sql "SELECT * FROM users WHERE id = ?")\n'
+        ) == []
+
+    def test_def_rest_arg_db_call_not_flagged_here(self):
+        # sql assigned later via a DB call; the def line carries no taint.
+        assert self._reg(
+            '(def sql (jdbc/query conn "SELECT 1"))\n'
+        ) == []
+
+
+class TestClojureShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.clj", code)]
+
+    def test_qualified_sh_str_flags(self):
+        assert self._reg(
+            '(clojure.java.shell/sh (str "ls -la " dir))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_sh_format_flags(self):
+        assert self._reg(
+            '(sh (format "cat %s" file))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_sh_str_flags(self):
+        assert self._reg(
+            '(sh (str "ping -c 1 " host))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_slash_sh_str_flags(self):
+        assert self._reg(
+            '(shell/sh (str "rm -rf " path))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            '(sh "ls" "-la" "/tmp")\n'
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            '(clojure.java.shell/sh "mkdir -p /tmp/app")\n'
+        ) == []
+
+    def test_process_slash_sh_static_is_quiet(self):
+        assert self._reg(
+            '(process/sh "echo ok")\n'
         ) == []
 
     def test_arg_list_process_quiet(self):

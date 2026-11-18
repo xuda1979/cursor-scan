@@ -836,6 +836,32 @@ RE_SHELL_CONCAT_HS = re.compile(
     re.I,
 )
 
+# Clojure (.clj / .cljs / .cljc): the signature taint is a `(str ...)`- or
+# `(format ...)`-built query string (inside a next.jdbc / clojure.jdbc-style
+# receiver call, or a `def sql ...` / `let [sql ...]` assignment build consumed
+# by a DB call on a later line) and a `(str ...)`/`(format ...)`-built command
+# string fed to clojure.java.shell/sh (or an aliased `sh`).  `?`-placeholder
+# vector binds and static command argument lists stay quiet.
+RE_SQL_CONCAT_CLJ = re.compile(
+    r"\b(?:jdbc/execute!|jdbc/execute-one!|jdbc/execute-batch!|jdbc/query|"
+    + r"next\.jdbc/execute!|next\.jdbc/execute-one!|next\.jdbc/execute-batch!|"
+    + r"next\.jdbc/query|execute!|execute-one!|execute-batch!|query)"
+    + r"[^(]*\(\s*(?:str|format)\s+[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*[\"']",
+    re.I,
+)
+RE_SQL_CONCAT_CLJ_ASSIGN = re.compile(
+    r"^\s*\(\s*def\s+[A-Za-z_]\w*\s+\(\s*(?:str|format)\s+[\"'][^\"']*(?:"
+    + _SQL_KW + r")[^\"']*[\"']"
+    + r"|^\s*\(\s*let\s+\[\s*[A-Za-z_]\w*\s+\(\s*(?:str|format)\s+[\"'][^\"']*(?:"
+    + _SQL_KW + r")[^\"']*[\"']",
+    re.I,
+)
+RE_SHELL_CONCAT_CLJ = re.compile(
+    r"\b(?:clojure\.java\.shell/sh|shell/sh|process/sh|sh)\b[^(]*\(\s*"
+    + r"(?:str|format)\s+[\"'][^\"']*[\"']",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -867,6 +893,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     erl_ext = ext in ("erl", "hrl")
     jl_ext = ext == "jl"
     hs_ext = ext in ("hs", "lhs")
+    clj_ext = ext in ("clj", "cljs", "cljc")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1073,6 +1100,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if hs_ext and RE_SHELL_CONCAT_HS.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if clj_ext and (RE_SQL_CONCAT_CLJ.search(line) or RE_SQL_CONCAT_CLJ_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if clj_ext and RE_SHELL_CONCAT_CLJ.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
