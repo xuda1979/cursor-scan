@@ -948,6 +948,31 @@ RE_SHELL_CONCAT_VBS = re.compile(
     re.I,
 )
 
+# ColdFusion (.cfm / .cfc): `#var#` interpolation inside a quoted SQL literal
+# feeds DB reads -- `QueryExecute("SELECT ... #id#", {}, {datasource="ds"})`
+# calls and `<cfset sql = "... #id#">` / script-style `sql = "... #id#"`
+# assignment builds consumed on a later line.  (A `<cfquery>` TAG BODY such
+# as `<cfquery>SELECT ... WHERE id = #url.id#</cfquery>` is not line-detected:
+# the shared line reducer strips unquoted `#` as a comment marker, so only
+# `#`-interpolation inside a quoted string survives reduction.)  The shell
+# sinks are `<cfexecute name="..." arguments="dir #folder#">` and a
+# `CfExecute/exec/Run("cmd.exe /c dir " & folder)` pattern call whose command
+# string is `&`/`+`-concatenated.  Bound `<cfqueryparam>` parameters, `:name`
+# placeholders and static literals stay quiet.
+RE_SQL_CONCAT_CFM = re.compile(
+    r"\bQueryExecute\s*\(\s*[\"'][^\"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*#[^\"']*[\"']",
+    re.I,
+)
+RE_SQL_CONCAT_CFM_ASSIGN = re.compile(
+    r"^\s*(?:<cfset\s+)?[A-Za-z_]\w*\s*=\s*[\"'][^\"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)[^\"']*#[^\"']*[\"']\s*;?",
+    re.I,
+)
+RE_SHELL_CONCAT_CFM = re.compile(
+    r"<cfexecute\b[^>]*\barguments\s*=\s*[\"'][^\"']*#[^\"']*[\"']"
+    + r"|(?:CfExecute|exec|Run)\s*(?:\(\s*" + _RE_ARG + r"|" + _RE_ARG + r")\s*[&+]",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -983,6 +1008,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     fs_ext = ext in ("fs", "fsi", "fsx")
     pas_ext = ext in ("pas", "pp", "dpr")
     vbs_ext = ext in ("vbs", "asp")
+    cfm_ext = ext in ("cfm", "cfc")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1213,6 +1239,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if vbs_ext and RE_SHELL_CONCAT_VBS.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if cfm_ext and (RE_SQL_CONCAT_CFM.search(line) or RE_SQL_CONCAT_CFM_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用 <cfqueryparam> 参数化查询"))
+        if cfm_ext and RE_SHELL_CONCAT_CFM.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

@@ -3214,3 +3214,69 @@ class TestVbsShellConcat:
         ) == []
 
 
+class TestCfmSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cfm", code)]
+
+    def test_queryexecute_interp_flags(self):
+        assert self._reg(
+            'QueryExecute("SELECT * FROM orders WHERE uid = #uid#", {}, '
+            '{datasource="ds"})\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_cfset_assign_interp_flags(self):
+        assert self._reg(
+            '<cfset sql = "DELETE FROM sessions WHERE sid = #sid#">\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_script_assign_interp_flags(self):
+        assert self._reg(
+            'q = "UPDATE accounts SET balance = #balance#";\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_cfqueryparam_is_quiet(self):
+        assert self._reg(
+            '<cfquery name="q" datasource="ds">SELECT * FROM users WHERE id = '
+            '<cfqueryparam value="#form.id#" cfsqltype="cf_sql_integer"></cfquery>\n'
+        ) == []
+
+    def test_named_placeholder_is_quiet(self):
+        assert self._reg(
+            'QueryExecute("SELECT * FROM users WHERE id = :uid", {uid=uid})\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'QueryExecute("SELECT * FROM users WHERE active = 1")\n'
+        ) == []
+
+
+class TestCfmShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cfm", code)]
+
+    def test_cfexecute_tag_interp_flags(self):
+        assert self._reg(
+            '<cfexecute name="cmd.exe" arguments="dir #folder#"></cfexecute>\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_cfexecute_call_amp_flags(self):
+        assert self._reg(
+            'CfExecute("cmd.exe /c net user " & username)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_runtime_exec_amp_flags(self):
+        assert self._reg(
+            'runtime.exec("cmd.exe /c ping -n 1 " & host)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_cfexecute_is_quiet(self):
+        assert self._reg(
+            '<cfexecute name="cmd.exe" arguments="/c cls"></cfexecute>\n'
+        ) == []
+
+    def test_static_call_is_quiet(self):
+        assert self._reg(
+            'CfExecute("cmd.exe /c cls")\n'
+        ) == []
+
