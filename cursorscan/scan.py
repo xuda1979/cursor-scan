@@ -52,7 +52,7 @@ TEXT_EXTS = {
     ".lua", ".r", ".swift", ".c", ".h", ".cpp", ".hpp", ".cs", ".ps1", ".sql",
     ".vb", ".scala", ".groovy", ".gradle", ".dart", ".m", ".mm", ".ex", ".exs",
     ".erl", ".hrl", ".jl", ".hs", ".lhs", ".clj", ".cljs", ".cljc", ".fs",
-    ".fsi", ".fsx", ".vue",
+    ".fsi", ".fsx", ".pas", ".pp", ".dpr", ".vue",
     ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
     ".tf", ".cfg", ".conf",
 }

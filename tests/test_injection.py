@@ -47,6 +47,13 @@ plus `let sql = ...` assignment builds, and `Process.Start` /
 `StartInfo.Arguments <-` fed a `sprintf`-built or `+`-concatenated command
 string; `@id` / `?` placeholders with `Parameters.AddWithValue(...)` and
 static command lines stay quiet)
+and Delphi / Object Pascal (`.pas`/`.pp`/`.dpr`: `+`-concatenated or
+`Format`-built (`%s`-verb) SQL literals into ADOQuery / FDQuery /
+General `.SQL.Text :=` / `.SQL.Add(...)` / `.CommandText :=` receivers
+plus `sql := ...` assignment builds, and `ShellExecute` / `WinExec` /
+`CreateProcess` fed a `+`-concatenated or `Format`-built command string;
+`:id` placeholders with `Parameters.ParamByName(...)` and static command
+lines stay quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -3052,5 +3059,81 @@ class TestFsShellConcat:
     def test_static_command_is_quiet(self):
         assert self._reg(
             'Process.Start("cat", file)\n'
+        ) == []
+
+
+class TestPasSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.pas", code)]
+
+    def test_ado_query_sql_text_plus_flags(self):
+        assert self._reg(
+            "cmd.SQL.Text := 'SELECT * FROM users WHERE id = ' + id;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_fd_query_sql_text_format_flags(self):
+        assert self._reg(
+            "qry.SQL.Text := Format('UPDATE accounts SET balance = %s', [amt]);\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_plus_flags(self):
+        assert self._reg(
+            "cmd.CommandText := 'DELETE FROM orders WHERE uid = ' + uid;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sql_add_plus_flags(self):
+        assert self._reg(
+            "FD.SQL.Add('DELETE FROM orders WHERE uid = ' + uid);\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_build_format_flags(self):
+        assert self._reg(
+            "sql := Format('SELECT * FROM orders WHERE uid = %s', [uid]);\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_bound_param_is_quiet(self):
+        assert self._reg(
+            "cmd.SQL.Text := 'DELETE FROM sessions WHERE sid = :sid';\n"
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            "qry.SQL.Text := 'SELECT * FROM files WHERE dir = :dir';\n"
+        ) == []
+
+
+class TestPasShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.pas", code)]
+
+    def test_shellexecute_plus_flags(self):
+        assert self._reg(
+            "ShellExecute(0, nil, PChar('cmd.exe'), PChar('/c dir ' + dir), nil, SW_HIDE);\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shellexecute_format_flags(self):
+        assert self._reg(
+            "ShellExecute(0, nil, 'notepad.exe', PChar(Format('\"%s\\%s\"', [buf, fileName])), "
+            "nil, SW_SHOW);\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_winexec_plus_flags(self):
+        assert self._reg(
+            "WinExec(PChar('net session ' + sid), SW_HIDE);\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_createprocess_plus_flags(self):
+        assert self._reg(
+            "CreateProcess(nil, PChar('ping -n 1 ' + host), nil, nil, False,\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            "ShellExecute(0, nil, PChar('cmd.exe'), PChar('/c dir C:\\'), nil, SW_HIDE);\n"
+        ) == []
+
+    def test_static_createprocess_is_quiet(self):
+        assert self._reg(
+            "CreateProcess(nil, PChar('cmd.exe /c cls'), nil, nil, False,\n"
         ) == []
 
