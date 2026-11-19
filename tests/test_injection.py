@@ -4535,3 +4535,121 @@ class TestSchemeShellConcat:
     def test_ss_extension_flags(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.ss",
             '(db:query conn (string-append "SELECT * FROM users WHERE id = " id))\n')] == [("injection.sql_concat", 1)]
+
+
+class TestGdSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.gd", code)]
+
+    def test_db_query_plus_concat_flags(self):
+        assert self._reg(
+            'db.query("SELECT * FROM users WHERE id = " + id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_update_plus_flags(self):
+        assert self._reg(
+            'db.query("UPDATE accounts SET balance = " + amt)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_double_quote_literal_flags(self):
+        assert self._reg(
+            "db.query(\"DELETE FROM sessions WHERE sid = '\" + sid + \"'\")\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_bind_row_drop_flags(self):
+        assert self._reg(
+            'db.query_bind_row("DROP TABLE " + tbl)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_percent_format_flags(self):
+        assert self._reg(
+            'db.query("INSERT INTO log VALUES (\'%s\')" % msg)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_with_params_percent_flags(self):
+        assert self._reg(
+            'db.query_with_params("SELECT * FROM log WHERE type = %s" % typ)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_var_assignment_plus_flags(self):
+        assert self._reg(
+            'var sql = "SELECT * FROM orders WHERE uid = " + uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_capitalized_module_sink_flags(self):
+        assert self._reg(
+            'SQLite.query_result_rows("SELECT * FROM t WHERE id = " + i)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            'db.query_with_params("SELECT * FROM users WHERE id = ?", [id])\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'db.query("SELECT count(*) FROM users")\n'
+        ) == []
+
+    def test_percent_in_literal_without_operator_is_quiet(self):
+        assert self._reg(
+            'db.query("SELECT * FROM t WHERE a = %s", [a])\n'
+        ) == []
+
+    def test_placeholder_in_build_is_quiet(self):
+        assert self._reg(
+            "db.query_with_params(\"INSERT INTO log (m) VALUES (?)\", [m])\n"
+        ) == []
+
+    def test_non_sql_string_is_quiet(self):
+        assert self._reg(
+            'var sql = "SELECT * FROM x"\n'
+        ) == []
+
+    def test_non_gd_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.rkt",
+            'db.query("SELECT * FROM users WHERE id = " + id)\n')] == []
+
+
+class TestGdShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.gd", code)]
+
+    def test_os_execute_sh_plus_flags(self):
+        assert self._reg(
+            'OS.execute("sh", ["-c", "ls -la " + dir])\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_os_execute_bash_plus_flags(self):
+        assert self._reg(
+            'OS.execute("bash", ["-c", "ping -c 1 " + host])\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_os_execute_zsh_percent_flags(self):
+        assert self._reg(
+            'OS.execute("zsh", ["-c", "tar czf /tmp/backup.tgz %s" % src])\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_create_process_flags(self):
+        assert self._reg(
+            'OS.create_process("sh", ["-c", "rm -rf " + path])\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_non_shell_command_is_quiet(self):
+        assert self._reg(
+            'OS.execute("ls", ["-la", "/tmp"])\n'
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'OS.execute("sh", ["-c", "echo ok"])\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        assert self._reg(
+            'db.query("SELECT * FROM users WHERE id = " + id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_gd_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.js",
+            'OS.execute("sh", ["-c", "ls -la " + dir])\n')] == []

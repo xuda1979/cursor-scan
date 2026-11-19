@@ -1319,6 +1319,45 @@ RE_SHELL_CONCAT_SCHEME = re.compile(
     re.I,
 )
 
+# GDScript (Godot, .gd): the signature taint is a SQL literal joined with `+`
+# (``db.query("SELECT ... " + id)``) or interpolated with GDScript's `%`
+# format operator (``db.query("SELECT ... %s" % val)``) fed to the built-in
+# SQLite facade (`db.query` / `db.query_with_params` / `db.query_bind_row` /
+# `db.query_result_rows`), and an `OS.execute` / `OS.create_process` call that
+# runs a command through a real shell: the first argument is a shell binary
+# (``"sh"`` / ``"bash"`` / ``"zsh"`` / ``"cmd"`` / ``"pwsh"`` /
+# ``"powershell"``) whose ``-c`` argument is a string built with `+` or `%`
+# from dynamic data (`OS.execute("sh", ["-c", "ls " + user_dir])`).
+# Parameterized queries (`?` placeholders, params array), static SQL strings
+# and non-shell command execution (``OS.execute("ls", ["-la", "/tmp"])``) stay
+# quiet.  Assignments (`var sql = "SELECT ... " + x`) are flagged because the
+# consuming DB call sits on a later line the line-scanner never sees.
+_RE_GD_SQL_BUILD = (
+    r"(?:" + _SQL_STR + r")\s*\+"
+    r"|(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*%[A-Za-z][^\"]*\"|"
+    r"'[^']*(?:" + _SQL_KW + r")[^']*%[A-Za-z][^']*')\s*%"
+)
+RE_SQL_CONCAT_GD = re.compile(
+    r"\b(?:db\.|SQLite\.|sqlite3\.|Database\.)"
+    + r"(?:query|query_with_params|query_bind_row|query_result_rows|execute_query|run_query)"
+    + r"\s*\(\s*(?:" + _RE_GD_SQL_BUILD + r")",
+    re.I,
+)
+RE_SQL_CONCAT_GD_ASSIGN = re.compile(
+    r"^\s*(?:var\s+)?\w+\s*=\s*(?:" + _RE_GD_SQL_BUILD + r")",
+    re.I,
+)
+_RE_GD_STR_BUILD = (
+    r"(?:[\"'][^\"']*[\"']\s*\+)"
+    r"|(?:[\"'][^\"']*%[A-Za-z][^\"']*[\"']\s*%)"
+)
+RE_SHELL_CONCAT_GD = re.compile(
+    r"\bOS\.(?:execute|create_process)\s*\(\s*[\"'](?:sh|bash|zsh|cmd|pwsh|powershell)[\"']\s*,\s*\[\s*[\"']-c[\"']\s*,\s*(?:"
+    + _RE_GD_STR_BUILD
+    + r")",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1367,6 +1406,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     ada_ext = ext in ("adb", "ads")
     lisp_ext = ext in ("lisp", "lsp", "cl")
     scheme_ext = ext in ("scm", "rkt", "ss", "sld")
+    gd_ext = ext == "gd"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1669,6 +1709,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if scheme_ext and RE_SHELL_CONCAT_SCHEME.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if gd_ext and (RE_SQL_CONCAT_GD.search(line) or RE_SQL_CONCAT_GD_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if gd_ext and RE_SHELL_CONCAT_GD.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
