@@ -132,9 +132,9 @@ python -m pytest tests/ -q   # 全量测试
 
 `fixtures/` 下有两棵树用于验收测试：
 
-- `fixtures/scan_bad/`：故意植入漏洞的 57 个文件（弱密码学 / 秘密 / 反序列化 / 注入 / 权限 / 访问控制
+- `fixtures/scan_bad/`：故意植入漏洞的 58 个文件（弱密码学 / 秘密 / 反序列化 / 注入 / 权限 / 访问控制
   / 依赖清单 / 跨站脚本），共 99 条期望规则 ID，检测率须 ≥ 90%。注入规则覆盖 Python / JS / PHP / Java /
-  Ruby / Go / C# / Kotlin / Rust / Perl / Lua / C/C++ / Swift / Shell / R / PowerShell / SQL / VB.NET / Scala / Groovy / Dart / Objective-C / Elixir / Erlang / Julia / Haskell / Clojure / F# / Delphi / Pascal / VBScript / classic ASP / ColdFusion / Tcl / OCaml / Nim / Crystal / Batch / COBOL / VBA。
+  Ruby / Go / C# / Kotlin / Rust / Perl / Lua / C/C++ / Swift / Shell / R / PowerShell / SQL / VB.NET / Scala / Groovy / Dart / Objective-C / Elixir / Erlang / Julia / Haskell / Clojure / F# / Delphi / Pascal / VBScript / classic ASP / ColdFusion / Tcl / OCaml / Nim / Crystal / Batch / COBOL / VBA / D。
 - `fixtures/scan_good/`：干净项目，须零误报（0 findings、100 / A）。
 
 验收标准（SPEC AC1–AC7）：

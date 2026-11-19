@@ -317,7 +317,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         # "SELECT ...")``), not Python-style source execution, so the generic
         # Python/JS exec convention must not fire there (extension-gate
         # precedent: yaml.load / .NET XXE below).
-        if ext != "nim" and RE_EXEC.search(raw):
+        if ext not in ("nim", "d", "di") and RE_EXEC.search(raw):
             findings.append(hit(lineno, "deser.exec", "exec 外部输入",
                                 "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
         if RE_VM_RUN.search(raw):

@@ -3886,3 +3886,109 @@ class TestVbaShellConcat:
         assert self._reg(
             'Set WshShell = CreateObject("WScript.Shell")\n'
         ) == []
+
+
+class TestDSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.d", code)]
+
+    def test_db_query_tilde_concat_flags(self):
+        assert self._reg(
+            'db.query("SELECT * FROM users WHERE id = " ~ userId);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_execute_tilde_concat_flags(self):
+        assert self._reg(
+            'conn.execute("UPDATE logs SET status = \'" ~ status ~ "\' WHERE id = " ~ id);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_exec_keyword_literal_concat_flags(self):
+        assert self._reg(
+            'db.exec("SELECT id FROM accounts WHERE owner = \'" ~ owner ~ "\'");\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_prepare_tilde_concat_flags(self):
+        assert self._reg(
+            'conn.prepare("DELETE FROM orders WHERE id > " ~ minId);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_connection_query_concat_flags(self):
+        assert self._reg(
+            'connection.query("DROP TABLE IF EXISTS audit_" ~ suffix);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pconn_execute_concat_flags(self):
+        assert self._reg(
+            'pconn.execute("INSERT INTO access VALUES (\'" ~ who ~ "\')");\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_auto_assignment_tilde_concat_flags(self):
+        assert self._reg(
+            'auto sql = "SELECT * FROM users WHERE id = " ~ userId;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_typed_assignment_tilde_concat_flags(self):
+        assert self._reg(
+            'string query = "SELECT name FROM t WHERE id = " ~ userInput;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'db.query("SELECT * FROM users WHERE id = 1");\n'
+        ) == []
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            'db.query("SELECT * FROM users WHERE id = ?", id);\n'
+        ) == []
+
+    def test_variable_only_sink_is_quiet(self):
+        assert self._reg(
+            'db.query(sql);\n'
+        ) == []
+
+    def test_non_sql_tilde_concat_is_quiet(self):
+        assert self._reg(
+            'auto msg = name ~ " is here";\n'
+        ) == []
+
+
+class TestDShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.d", code)]
+
+    def test_execute_shell_tilde_concat_flags(self):
+        assert self._reg(
+            'executeShell("ls -l " ~ dir);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_spawn_shell_tilde_concat_flags(self):
+        assert self._reg(
+            'spawnShell("tar czf /tmp/out.tgz " ~ target);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_tilde_concat_flags(self):
+        assert self._reg(
+            'system("mkdir " ~ dirName);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_shell_is_quiet(self):
+        assert self._reg(
+            'executeShell("ls -l");\n'
+            'auto r = system("date");\n'
+        ) == []
+
+    def test_arg_list_spawn_is_quiet(self):
+        assert self._reg(
+            'spawnShell(["echo", "hi"]);\n'
+        ) == []
+
+    def test_variable_only_shell_is_quiet(self):
+        assert self._reg(
+            'executeShell(cmd);\n'
+        ) == []
+
+    def test_non_d_extension_does_not_flag(self):
+        # Same text under a .py extension must not fire D patterns.
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            'executeShell("ls -l " ~ dir);\n')] == []

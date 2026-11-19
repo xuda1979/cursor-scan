@@ -1155,6 +1155,31 @@ RE_SHELL_CONCAT_VBA = re.compile(
     + r"|\bWshShell\.(?:Run|Exec)\s*(?:\([^)\n]{0,40})?[\"'][^\"'\n]*?[\"']\s*&",
     re.I,
 )
+# D (.d/.di): D builds SQL strings with the `~` concatenation operator and
+# hands them to vibe.d/mysql-native statement runners (``db.query``,
+# ``conn.execute``, ``db.exec``, ``conn.prepare``), or to std.process
+# ``executeShell``/``spawnShell`` / ``system``.  The taint signal is a
+# keyword-bearing quoted fragment immediately followed by `~` -- a
+# user-controlled expression spliced into the statement.  A static call
+# (no `~`) stays quiet, as do parameterized queries and non-SQL `~`
+# concatenation.
+RE_SQL_CONCAT_D = re.compile(
+    r"\b(?:db|conn|connection|pconn)\.(?:query|exec|execute|prepare)\s*\([^\"'\n]*("
+    + _SQL_STR
+    + r")\s*~",
+    re.I,
+)
+RE_SQL_CONCAT_D_ASSIGN = re.compile(
+    r"^\s*(?:(?:auto|const|immutable|static|string|char\s*\[\s*\])\s+)?"
+    + r"(?:[A-Za-z_]\w*\s*=\s*)?("
+    + _SQL_STR
+    + r")\s*~",
+    re.I,
+)
+RE_SHELL_CONCAT_D = re.compile(
+    r"\b(?:executeShell|spawnShell|system)\s*\([^\"'\n]*[\"'][^\"'\n]*[\"']\s*~",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1199,6 +1224,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     bat_ext = ext in ("bat", "cmd")
     cob_ext = ext in ("cob", "cbl")
     vba_ext = ext in ("vba", "bas")
+    d_ext = ext in ("d", "di")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1477,6 +1503,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if vba_ext and RE_SHELL_CONCAT_VBA.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if d_ext and (RE_SQL_CONCAT_D.search(line) or RE_SQL_CONCAT_D_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if d_ext and RE_SHELL_CONCAT_D.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
