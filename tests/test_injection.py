@@ -3664,3 +3664,120 @@ class TestBatchShellConcat:
         assert self._reg("echo Hello %name%\n") == []
 
 
+
+class TestCobolSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cob", code)]
+
+    def test_string_concat_select_flags(self):
+        assert self._reg(
+            '           STRING "SELECT * FROM USERS WHERE ID = " WS-UID DELIMITED BY SIZE INTO WS-QUERY.\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_concat_multi_fragment_flags(self):
+        # Multiple spliced fragments; the first variable after a SQL-keyword
+        # fragment is the taint.
+        assert self._reg(
+            '           STRING "INSERT INTO AUDIT_LOG (UID, ACTION) VALUES (" WS-UID ", " WS-ACTION ")" DELIMITED BY SIZE INTO WS-SQL.\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_concat_update_flags(self):
+        assert self._reg(
+            "           STRING 'UPDATE ACCOUNTS SET BALANCE = ' WS-AMOUNT DELIMITED BY SIZE INTO WS-SQL.\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_concat_delete_alter_drop_flags(self):
+        assert self._reg(
+            '           STRING "DELETE FROM SESSIONS WHERE SID = " WS-SID DELIMITED BY SIZE INTO WS-QUERY.\n'
+            '           STRING "ALTER TABLE USERS ADD COLUMN " WS-COLM DELIMITED BY SIZE INTO WS-SQL.\n'
+            '           STRING "DROP TABLE " WS-TBL DELIMITED BY SIZE INTO WS-SQL.\n'
+        ) == [("injection.sql_concat", 1), ("injection.sql_concat", 2), ("injection.sql_concat", 3)]
+
+    def test_exec_sql_execute_immediate_flags(self):
+        assert self._reg(
+            "           EXEC SQL EXECUTE IMMEDIATE :WS-QUERY\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_immediate_bare_flags(self):
+        assert self._reg(
+            "           EXECUTE IMMEDIATE :WS-QUERY\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_immediate_unnamed_var_flags(self):
+        assert self._reg(
+            "           EXEC SQL EXECUTE IMMEDIATE WS-DYNA-STATEMENT.\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_move_static_sql_is_quiet(self):
+        # MOVE of a static literal is not a dynamic query build.
+        assert self._reg(
+            '           MOVE "SELECT * FROM USERS WHERE ID = 1" TO WS-QUERY.\n'
+        ) == []
+
+    def test_string_no_keyword_is_quiet(self):
+        # No SQL keyword: ordinary message assembly stays quiet.
+        assert self._reg(
+            '           STRING "MESSAGE PREPARED" WS-CODE DELIMITED BY SIZE INTO WS-OUT.\n'
+            '           STRING "SAVE FILE OK" WS-NAME DELIMITED BY SIZE INTO WS-OUT.\n'
+        ) == []
+
+    def test_string_lone_literal_is_quiet(self):
+        # A static SQL literal without a spliced data name is not dynamic.
+        assert self._reg(
+            '           STRING "SELECT COUNT(*) FROM T" DELIMITED BY SIZE INTO WS-OUT.\n'
+        ) == []
+
+    def test_string_bind_placeholder_is_quiet(self):
+        # Host-variable placeholder is a static, parameterized statement.
+        assert self._reg(
+            '           STRING "INSERT INTO AUDIT_LOG (UID) VALUES (:BIND-UID)" DELIMITED BY SIZE INTO WS-SQL.\n'
+        ) == []
+
+    def test_exec_sql_bound_query_is_quiet(self):
+        assert self._reg(
+            "           EXEC SQL SELECT * FROM USERS WHERE ID = :WS-ID END-EXEC.\n"
+            "           EXEC SQL INSERT INTO LOG_ENTRIES VALUES (:WS-MSG) END-EXEC.\n"
+        ) == []
+
+    def test_execute_immediate_literal_is_quiet(self):
+        # Literal SQL, not a variable: static.
+        assert self._reg(
+            "           EXEC SQL EXECUTE IMMEDIATE 'DELETE FROM T' END-EXEC.\n"
+        ) == []
+
+
+class TestCobolShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.cob", code)]
+
+    def test_call_system_del_var_flags(self):
+        assert self._reg(
+            '           CALL "SYSTEM" USING "DEL " WS-FILE.\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_call_system_multi_var_flags(self):
+        assert self._reg(
+            '           CALL "SYSTEM" USING "NET USER " WS-USER " HACK /ADD".\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_call_system_single_quoted_module_flags(self):
+        assert self._reg(
+            "           CALL 'SYSTEM' USING \"PURGE \" WS-FOLDER.\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            '           CALL "SYSTEM" USING "DATE".\n'
+            '           CALL "SYSTEM" USING "COPY A.TXT B.TXT".\n'
+        ) == []
+
+    def test_bare_variable_is_quiet(self):
+        # The whole command comes from a variable -- no concatenated fragment.
+        assert self._reg(
+            '           CALL "SYSTEM" USING WS-CMD.\n'
+        ) == []
+
+    def test_other_module_call_is_quiet(self):
+        assert self._reg(
+            '           CALL "CBL_GET_EXTERNAL" USING WS-ARG.\n'
+        ) == []

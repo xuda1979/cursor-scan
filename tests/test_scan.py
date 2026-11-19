@@ -62,6 +62,7 @@ BAD_EXPECTED = [
     ("injection.nim", {"injection.sql_concat", "injection.shell_concat"}),
     ("injection.cr", {"injection.sql_concat", "injection.shell_concat"}),
     ("injection.bat", {"injection.sql_concat", "injection.shell_concat"}),
+    ("injection.cob", {"injection.sql_concat", "injection.shell_concat"}),
     ("permissions.py", {"perms.chmod_world_writable", "perms.world_writable_dir",
                         "perms.tmp_write_insecure", "perms.mktemp_unsafe"}),
     ("access_control_flask.py", {"access_control.missing_auth"}),
@@ -184,7 +185,7 @@ class TestZeroFalsePositives:
                      "secure_injection.vbs", "secure_injection.cfm",
                      "secure_injection.tcl", "secure_injection.ml",
                      "secure_injection.nim", "secure_injection.cr",
-                     "secure_injection.bat"):
+                     "secure_injection.bat", "secure_injection.cob"):
             assert os.path.isfile(os.path.join(good_dir, name)), \
                 f"{name} must exist (AC2 coverage)"
             assert not any(f.file.endswith(name)

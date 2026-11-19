@@ -1109,6 +1109,29 @@ RE_SHELL_CONCAT_BAT = re.compile(
     + r"|\b(?:cmd|start|call)\b[^%\r\n]*%[A-Za-z0-9_*]+\%",
     re.I,
 )
+# COBOL (.cob/.cbl): mainframe dynamic SQL is built with the STRING verb, which
+# splices SQL text fragments and data-names into one target query.  The taint
+# signal is a quoted fragment containing a SQL keyword immediately followed by a
+# bare COBOL identifier -- the keyword-bearing literal and the user-controlled
+# field both go into the executed statement.  A lone literal is static (the
+# reserved-word lookahead keeps `STRING "SELECT ... " DELIMITED BY SIZE ...`
+# quiet), EXEC SQL EXECUTE IMMEDIATE :VAR runs a host variable, and shell
+# injection uses CALL "SYSTEM" USING with a concatenated command fragment.
+RE_SQL_CONCAT_COB = re.compile(
+    r"\bSTRING\b[^\n]*?[\"'][^\"'\n]*?(?:\b" + _SQL_KW + r"\b)[^\"'\n]*?[\"']\s+"
+    + r"[A-Za-z][A-Za-z0-9-]*"
+    + r"(?=\s*(?:(?:DELIMITED\b|INTO\b|POINTER\b)|[\"']|[.\n]|$))",
+    re.I,
+)
+RE_SQL_CONCAT_COB_EXEC = re.compile(
+    r"\bEXEC\s+SQL\s+(?:EXECUTE\s+)?IMMEDIATE\s+:?[A-Za-z_]\w*"
+    + r"|\bEXECUTE\s+IMMEDIATE\s+:?[A-Za-z_]\w*",
+    re.I,
+)
+RE_SHELL_CONCAT_COB = re.compile(
+    r"\bCALL\s+[\"']SYSTEM[\"']\s+USING\s+[\"'][^\"'\n]{0,120}[\"']\s*[A-Za-z][A-Za-z0-9-]*",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1151,6 +1174,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     nim_ext = ext == "nim"
     cr_ext = ext == "cr"
     bat_ext = ext in ("bat", "cmd")
+    cob_ext = ext in ("cob", "cbl")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1417,6 +1441,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if bat_ext and RE_SHELL_CONCAT_BAT.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if cob_ext and (RE_SQL_CONCAT_COB.search(line) or RE_SQL_CONCAT_COB_EXEC.search(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if cob_ext and RE_SHELL_CONCAT_COB.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
