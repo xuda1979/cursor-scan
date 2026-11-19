@@ -1389,6 +1389,39 @@ RE_SHELL_CONCAT_RAKU = re.compile(
     r"\b(?:shell|proc-open)\s*\(\s*(?:" + _RE_RAKU_STR_BUILD + r")",
     re.I,
 )
+# Hack (HHVM): PHP-derived, so `.` concatenation and double-quoted `$var`
+# interpolation are the dynamic builds.  DB sinks are the MySQLi / AsyncMysql
+# object receivers ($conn->query/prepare/exec/execute/execute_update), the
+# function forms (mysqli_query/mysql_query/pg_query/mssql_query/sqlsrv_query)
+# and the queryf() printf-verb form, plus the `$sql = "..." . $x` assignment
+# build consumed by a DB call on a later line.  Shell sinks are
+# shell_exec/system/passthru/proc_open/bare exec fed a `.`-concatenated or
+# `$var`-interpolated command string.  Static SQL, parameterized `?`
+# placeholders, static commands and arg-array shells stay quiet.
+_RE_HACK_SQL_BUILD = (
+    r"(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$[A-Za-z_][A-Za-z0-9_]*[^\"]*\")"
+    r"|(?:" + _SQL_STR + r")\s*\."
+)
+RE_SQL_CONCAT_HACK = re.compile(
+    r"\$\w+\s*->\s*(?:query|prepare|exec|execute|execute_update)\s*\([^;]*?(?:"
+    + _RE_HACK_SQL_BUILD
+    + r")"
+    r"|\b(?:mysqli_query|mysql_query|pg_query|mssql_query|sqlsrv_query)\s*\([^;]*?(?:"
+    + _RE_HACK_SQL_BUILD
+    + r")",
+    re.I,
+)
+RE_SQL_CONCAT_HACK_ASSIGN = re.compile(
+    r"^\s*\$\w+\s*=\s*(?:" + _RE_HACK_SQL_BUILD + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_HACK = re.compile(
+    r"\b(?:shell_exec|system|passthru|proc_open)\s*\(\s*"
+    r"(?:\"[^\"]*\"\s*\.|'[^']*'\s*\.|\"[^\"]*\$[A-Za-z_][A-Za-z0-9_]*[^\"]*\")"
+    r"|(?<!->)\bexec\s*\(\s*"
+    r"(?:\"[^\"]*\"\s*\.|'[^']*'\s*\.|\"[^\"]*\$[A-Za-z_][A-Za-z0-9_]*[^\"]*\")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1440,6 +1473,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     scheme_ext = ext in ("scm", "rkt", "ss", "sld")
     gd_ext = ext == "gd"
     raku_ext = ext in ("raku", "p6", "pm6", "p6l", "p6m")
+    hack_ext = ext in ("hh", "hack")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1754,6 +1788,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if raku_ext and RE_SHELL_CONCAT_RAKU.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if hack_ext and (RE_SQL_CONCAT_HACK.search(line) or RE_SQL_CONCAT_HACK_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if hack_ext and RE_SHELL_CONCAT_HACK.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

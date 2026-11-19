@@ -4766,3 +4766,126 @@ class TestRakuShellConcat:
     def test_non_raku_extension_does_not_flag(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'shell("ls -la " ~ $dir)\n')] == []
+
+
+class TestHackSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.hh", code)]
+
+    def test_object_query_concat_flags(self):
+        assert self._reg(
+            '$conn->query("SELECT * FROM users WHERE id = " . $id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_object_query_interpolated_flags(self):
+        assert self._reg(
+            '$conn->query("SELECT * FROM users WHERE id = $id")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_object_prepare_concat_flags(self):
+        assert self._reg(
+            '$db->prepare("UPDATE accounts SET balance = balance - " . $amt)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_function_query_interpolated_flags(self):
+        assert self._reg(
+            'mysqli_query($conn, "DELETE FROM sessions WHERE sid = $sid")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_object_exec_concat_flags(self):
+        assert self._reg(
+            '$dbh->exec("DROP TABLE " . $tbl)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_concat_flags(self):
+        assert self._reg(
+            '$sql = "SELECT * FROM t WHERE uname = " . $name;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_interpolated_flags(self):
+        assert self._reg(
+            '$stmt = "SELECT count(*) FROM items WHERE owner = $owner";\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            '$conn->query("SELECT * FROM users WHERE id = ?", $params)\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            '$conn->query("SELECT count(*) FROM users")\n'
+        ) == []
+
+    def test_non_sql_interpolation_is_quiet(self):
+        assert self._reg(
+            '$s = "hello $name";\n'
+        ) == []
+
+    def test_static_function_query_is_quiet(self):
+        assert self._reg(
+            'mysqli_query($conn, "SELECT 1")\n'
+        ) == []
+
+    def test_non_hack_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            '$conn->query("SELECT * FROM users WHERE id = " . $id)\n')] == []
+
+
+class TestHackShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.hh", code)]
+
+    def test_shell_exec_concat_flags(self):
+        assert self._reg(
+            'shell_exec("ls -la " . $dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_interpolated_flags(self):
+        assert self._reg(
+            'system("ping -c 1 $host")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_proc_open_concat_flags(self):
+        assert self._reg(
+            'proc_open("tar czf /tmp/backup.tgz " . $src, $d, $p)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_bare_exec_concat_flags(self):
+        assert self._reg(
+            'exec("ls -la " . $dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'shell_exec("echo ok")\n'
+        ) == []
+
+    def test_no_concat_is_quiet(self):
+        assert self._reg(
+            'system("ping 127.0.0.1")\n'
+        ) == []
+
+    def test_arg_array_shell_is_quiet(self):
+        assert self._reg(
+            'proc_open(["ls", "-la", $dir], $d, $p)\n'
+        ) == []
+
+    def test_variable_only_command_is_quiet(self):
+        assert self._reg(
+            'shell_exec($cmd)\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        assert self._reg(
+            '$conn->query("SELECT * FROM users WHERE id = " . $id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_method_receiver_exec_is_quiet(self):
+        assert self._reg(
+            '$conn->exec("SELECT 1")\n'
+        ) == []
+
+    def test_non_hack_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            'shell_exec("ls -la " . $dir)\n')] == []
