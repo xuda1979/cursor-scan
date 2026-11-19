@@ -1422,6 +1422,36 @@ RE_SHELL_CONCAT_HACK = re.compile(
     r"(?:\"[^\"]*\"\s*\.|'[^']*'\s*\.|\"[^\"]*\$[A-Za-z_][A-Za-z0-9_]*[^\"]*\")",
     re.I,
 )
+# Gleam (BEAM sibling of Elixir): the signature taint is a `<>`-concatenated or
+# `{expr}`-interpolated (double-quoted) query string fed to the pgo / sqlight /
+# aga receivers (plus the `let sql = "..." <> x` assignment build consumed by a
+# DB call on a later line), and a `<>`-concatenated / `{expr}`-interpolated
+# command string fed to erlang.system_cmd.  Gleam's `#("spawn", ...)` open_port
+# tuples and `let #(a, b) = ...` unpacking start with a bare `#`, which
+# ``code_lines`` strips as an inline comment, so they are not visible to the
+# scanner.  `$1`-style binds, `?` placeholders, static literals, arg-array
+# commands and pure-variable commands stay quiet.
+_RE_GLEAM_SQL_BUILD = (
+    r"(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\{[^}\"']{1,80}\}[^\"]*\")"
+    r"|(?:" + _SQL_STR + r")\s*<>"
+)
+RE_SQL_CONCAT_GLEAM = re.compile(
+    r"\b(?:pgo\.(?:query|execute)|sqlight\.(?:query|execute|run)|aga\.query)"
+    + r"\s*\(\s*(?:[^,]+,\s*)?(?:" + _RE_GLEAM_SQL_BUILD + r")",
+    re.I,
+)
+RE_SQL_CONCAT_GLEAM_ASSIGN = re.compile(
+    r"^\s*(?:let\s+)?[A-Za-z_]\w*\s*=\s*(?:" + _RE_GLEAM_SQL_BUILD + r")",
+    re.I,
+)
+_RE_GLEAM_STR_BUILD = (
+    r"(?:[\"'][^\"']*[\"']\s*<>)"
+    r"|(?:\"[^\"]*\{[^}\"']{1,80}\}[^\"]*\")"
+)
+RE_SHELL_CONCAT_GLEAM = re.compile(
+    r"erlang\.system_cmd\s*\(\s*(?:" + _RE_GLEAM_STR_BUILD + r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1474,6 +1504,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     gd_ext = ext == "gd"
     raku_ext = ext in ("raku", "p6", "pm6", "p6l", "p6m")
     hack_ext = ext in ("hh", "hack")
+    gleam_ext = ext == "gleam"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1794,6 +1825,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if hack_ext and RE_SHELL_CONCAT_HACK.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if gleam_ext and (RE_SQL_CONCAT_GLEAM.search(line) or RE_SQL_CONCAT_GLEAM_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
+        if gleam_ext and RE_SHELL_CONCAT_GLEAM.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

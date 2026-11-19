@@ -4889,3 +4889,121 @@ class TestHackShellConcat:
     def test_non_hack_extension_does_not_flag(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
             'shell_exec("ls -la " . $dir)\n')] == []
+
+
+class TestGleamSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.gleam", code)]
+
+    def test_pgo_query_concat_flags(self):
+        assert self._reg(
+            'pgo.query(conn, "SELECT * FROM users WHERE id = " <> id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pgo_query_interpolated_flags(self):
+        assert self._reg(
+            'pgo.query(conn, "SELECT * FROM users WHERE id = {id}")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pgo_execute_concat_flags(self):
+        assert self._reg(
+            'pgo.execute(conn, "UPDATE accounts SET balance = balance - " <> amount)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlight_execute_concat_flags(self):
+        assert self._reg(
+            'sqlight.execute(conn, "DELETE FROM sessions WHERE sid = " <> sid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlight_query_interpolated_flags(self):
+        assert self._reg(
+            'sqlight.query(conn, "SELECT * FROM payments WHERE name = {name}")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_aga_query_concat_flags(self):
+        assert self._reg(
+            'aga.query(conn, "DROP TABLE " <> tbl)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_concat_flags(self):
+        assert self._reg(
+            'let sql = "SELECT count(*) FROM items WHERE owner = " <> owner\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_bind_is_quiet(self):
+        assert self._reg(
+            'pgo.query(conn, "SELECT * FROM users WHERE id = $1", [id])\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'pgo.query(conn, "SELECT count(*) FROM users")\n'
+        ) == []
+
+    def test_non_sql_interpolation_is_quiet(self):
+        assert self._reg(
+            'let greeting = "hello, {name}"\n'
+        ) == []
+
+    def test_sqlight_question_placeholder_is_quiet(self):
+        assert self._reg(
+            'sqlight.query(conn, "SELECT name FROM items WHERE id = ?", [id])\n'
+        ) == []
+
+    def test_non_gleam_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            'pgo.query(conn, "SELECT * FROM users WHERE id = {id}")\n')] == []
+
+
+class TestGleamShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.gleam", code)]
+
+    def test_system_cmd_concat_flags(self):
+        assert self._reg(
+            'erlang.system_cmd("ls -la " <> dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_cmd_interpolated_flags(self):
+        assert self._reg(
+            'erlang.system_cmd("ping -c 1 {host}")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_cmd_chained_concat_flags(self):
+        assert self._reg(
+            'erlang.system_cmd("cat " <> path <> " | grep " <> needle)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_single_quote_concat_flags(self):
+        assert self._reg(
+            "erlang.system_cmd('ls -la ' <> dir)\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'erlang.system_cmd("echo ok")\n'
+        ) == []
+
+    def test_arg_array_command_is_quiet(self):
+        assert self._reg(
+            'erlang.system_cmd("ls", ["-la", dir])\n'
+        ) == []
+
+    def test_variable_only_command_is_quiet(self):
+        assert self._reg(
+            'erlang.system_cmd(full)\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        assert self._reg(
+            'pgo.query(conn, "SELECT * FROM users WHERE id = " <> id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_shell_erlang_call_is_quiet(self):
+        assert self._reg(
+            'erlang.system_cmd(full)\n'
+        ) == []
+
+    def test_non_gleam_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            'erlang.system_cmd("ls -la " <> dir)\n')] == []
