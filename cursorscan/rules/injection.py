@@ -1476,6 +1476,17 @@ RE_SHELL_CONCAT_ELM = re.compile(
     r"\bPorts\.exec\s*\(?\s*\(?(?:" + _RE_ELM_STR_BUILD + r")",
     re.I,
 )
+# Vue (.vue): SFC pages host the same JS-style taint as .js/.jsx, so the JS
+# SQL-concat receivers (db.query/pool.query/mysql2/knex.raw/sequelize.query/
+# connection.execute...) and the `const q = "..." + x` assignment build are
+# reused under the vue gate.  Shell taint is the child_process family
+# (exec/execSync/execFile/spawn) fed a `+`-concatenated or backtick-`${}`-
+# interpolated command string; static literals, args-array invocation and
+# `?`-placeholder parameterized SQL stay quiet.
+RE_SHELL_CONCAT_VUE = re.compile(
+    r"\b(?:exec|execSync|execFile|spawn)\s*\(\s*(?:[\"'][^\"']*[\"']\s*\+|`[^`]*\$\{)",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1530,6 +1541,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     hack_ext = ext in ("hh", "hack")
     gleam_ext = ext == "gleam"
     elm_ext = ext == "elm"
+    vue_ext = ext == "vue"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1862,6 +1874,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
         if elm_ext and RE_SHELL_CONCAT_ELM.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if vue_ext and (RE_SQL_CONCAT_JS.search(line) or RE_SQL_CONCAT_JS_ASSIGN.search(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
+        if vue_ext and RE_SHELL_CONCAT_VUE.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

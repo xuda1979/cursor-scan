@@ -96,7 +96,7 @@ def bad_copy(tmp_path):
 
 
 class TestIgnoreIntegration:
-    """scan_bad yields 537 findings; sql_concat x258, shell_concat x146,
+    """scan_bad yields 547 findings; sql_concat x265, shell_concat x149,
     crypto.* x9, xss medium x3."""
 
     def test_cli_ignore_reduces_findings(self, bad_copy, capsys):
@@ -104,15 +104,15 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1  # high/critical findings remain, --fail-on high gate holds
-        assert "发现 279 个问题" in out  # 537 - 258 suppressed
-        assert "已忽略 258 个发现" in out
+        assert "发现 282 个问题" in out  # 547 - 265 suppressed
+        assert "已忽略 265 个发现" in out
 
     def test_glob_ignore_suppresses_rule_family(self, bad_copy, capsys):
         rc = main([bad_copy, "--no-save", "--ignore", "crypto.*",
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "发现 528 个问题" in out  # 537 - 9 crypto
+        assert "发现 538 个问题" in out  # 547 - 9 crypto
         assert "已忽略 9 个发现" in out
 
     def test_rule_file_line_form(self, bad_copy, capsys):
@@ -135,7 +135,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         doc = json.loads(capsys.readouterr().out)
         assert rc == 1
-        assert len(doc["suppressed"]) == 258
+        assert len(doc["suppressed"]) == 265
         assert {f["rule_id"] for f in doc["suppressed"]} == {"injection.sql_concat"}
         # Kept findings no longer include the suppressed rules.
         assert not any(f["rule_id"] == "injection.sql_concat" for f in doc["findings"])
@@ -157,7 +157,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "已忽略 267 个发现" in out  # 9 crypto + 258 sql_concat
+        assert "已忽略 274 个发现" in out  # 9 crypto + 265 sql_concat
 
     def test_suppress_all_flips_gate_to_clean(self, bad_copy, capsys):
         with open(os.path.join(bad_copy, ".cursor-scan.json"), "w") as fh:

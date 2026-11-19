@@ -5120,3 +5120,126 @@ class TestElmShellConcat:
     def test_non_elm_extension_does_not_flag(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
             'Ports.exec ("tar -czf backup.tar.gz " ++ target)\n')] == []
+
+
+class TestVueSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vue", code)]
+
+    def test_db_query_concat_flags(self):
+        assert self._reg(
+            "db.query('SELECT * FROM users WHERE id = ' + userId)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pool_query_template_flags(self):
+        assert self._reg(
+            "pool.query(`SELECT * FROM payments WHERE owner = ${ownerId}`)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_mysql2_query_concat_flags(self):
+        assert self._reg(
+            "mysql2.query('INSERT INTO logs VALUES (' + payload)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_knex_raw_concat_flags(self):
+        assert self._reg(
+            "knex.raw('SELECT * FROM items WHERE name = ' + name)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sequelize_query_concat_flags(self):
+        assert self._reg(
+            "sequelize.query('UPDATE accounts SET balance = balance - ' + amount)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_connection_execute_concat_flags(self):
+        assert self._reg(
+            "connection.execute('DELETE FROM sessions WHERE sid = ' + sid)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_concat_flags(self):
+        assert self._reg(
+            "const q = 'DROP TABLE ' + tbl;\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            "db.query('SELECT * FROM users WHERE id = ?', [userId])\n"
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            "db.query('SELECT count(*) FROM items')\n"
+        ) == []
+
+    def test_static_assignment_is_quiet(self):
+        assert self._reg(
+            "const sql = 'SELECT * FROM users WHERE name = ?';\n"
+        ) == []
+
+    def test_non_sql_concat_is_quiet(self):
+        assert self._reg(
+            "return 'hello, ' + name;\n"
+        ) == []
+
+    def test_template_without_sql_keyword_is_quiet(self):
+        assert self._reg(
+            "pool.query(`SELECT * FROM payments WHERE owner = ?`, [ownerId])\n"
+        ) == []
+
+    def test_non_vue_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            "db.query('SELECT * FROM users WHERE id = ' + userId)\n")] == []
+
+
+class TestVueShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vue", code)]
+
+    def test_execsync_concat_flags(self):
+        assert self._reg(
+            "execSync('tar -czf backup.tar.gz ' + target);\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_exec_concat_flags(self):
+        assert self._reg(
+            "exec('ping -c 1 ' + host);\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_exec_template_interpolated_flags(self):
+        assert self._reg(
+            "execSync(`cat ${path} | grep ${needle}`);\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            "execSync('tar -czf backup.tar.gz /data');\n"
+        ) == []
+
+    def test_static_template_is_quiet(self):
+        assert self._reg(
+            "execSync(`cat config`);\n"
+        ) == []
+
+    def test_arg_array_command_is_quiet(self):
+        assert self._reg(
+            "execSync('ls', [dir]);\n"
+        ) == []
+
+    def test_spawn_args_array_is_quiet(self):
+        assert self._reg(
+            "spawn('ls', [dir]);\n"
+        ) == []
+
+    def test_variable_only_command_is_quiet(self):
+        assert self._reg(
+            "execSync(full);\n"
+        ) == []
+
+    def test_string_concat_without_sink_is_quiet(self):
+        assert self._reg(
+            "const cmd = 'cat ' + path;\n"
+        ) == []
+
+    def test_non_vue_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            "execSync('tar -czf backup.tar.gz ' + target);\n")] == []
