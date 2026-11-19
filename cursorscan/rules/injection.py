@@ -1358,6 +1358,38 @@ RE_SHELL_CONCAT_GD = re.compile(
     re.I,
 )
 
+# Raku (.raku / .p6 / .pm6): the signature taint is a double-quoted SQL literal
+# whose `$var` interpolation is filled before execution (`$dbh.query("SELECT * FROM
+# users WHERE id = $id")`, the interpolating form being the Raku idiom like Perl)
+# or a `~`-concatenated keyword-bearing SQL literal fed to a DBIish handle sink
+# (`$dbh.query("... " ~ $id)`), plus the `my $sql = "..." ~ $x` / `my $sql =
+# "SELECT...$x"` assignment builds whose consuming DB call sits on a later line
+# the line-scanner never sees.  Shell injection is the `~`-concatenated or
+# `$var`-interpolated command string fed to `shell(...)` or the pipe/run builtin
+# `proc-open(...)`.  Parameterized `?` queries, static SQL, static commands,
+# arg-list execution and ordinary `"hello $name"` interpolation stay quiet.
+_RE_RAKU_SQL_BUILD = (
+    r"(?:\"[^\"]*(?:" + _SQL_KW + r")[^\"]*\$[A-Za-z_][A-Za-z0-9_]*[^\"]*\")"
+    r"|(?:" + _SQL_STR + r")\s*~"
+)
+RE_SQL_CONCAT_RAKU = re.compile(
+    r"\b(?:dbh|db|conn|connection|database|sqlite|mysql|pg|pgsql)\."
+    + r"(?:query|prepare|execute|do)\s*\(\s*(?:" + _RE_RAKU_SQL_BUILD + r")",
+    re.I,
+)
+RE_SQL_CONCAT_RAKU_ASSIGN = re.compile(
+    r"^\s*(?:my\s+)?\$\w+\s*=\s*(?:" + _RE_RAKU_SQL_BUILD + r")",
+    re.I,
+)
+_RE_RAKU_STR_BUILD = (
+    r"(?:[\"'][^\"']*[\"']\s*~)"
+    r"|(?:\"[^\"]*\$[A-Za-z_][A-Za-z0-9_]*[^\"]*\")"
+)
+RE_SHELL_CONCAT_RAKU = re.compile(
+    r"\b(?:shell|proc-open)\s*\(\s*(?:" + _RE_RAKU_STR_BUILD + r")",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1407,6 +1439,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     lisp_ext = ext in ("lisp", "lsp", "cl")
     scheme_ext = ext in ("scm", "rkt", "ss", "sld")
     gd_ext = ext == "gd"
+    raku_ext = ext in ("raku", "p6", "pm6", "p6l", "p6m")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1715,6 +1748,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if gd_ext and RE_SHELL_CONCAT_GD.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if raku_ext and (RE_SQL_CONCAT_RAKU.search(line) or RE_SQL_CONCAT_RAKU_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if raku_ext and RE_SHELL_CONCAT_RAKU.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

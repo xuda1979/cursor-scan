@@ -4653,3 +4653,116 @@ class TestGdShellConcat:
     def test_non_gd_extension_does_not_flag(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.js",
             'OS.execute("sh", ["-c", "ls -la " + dir])\n')] == []
+
+
+class TestRakuSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.raku", code)]
+
+    def test_dbh_query_tilde_concat_flags(self):
+        assert self._reg(
+            '$dbh.query("SELECT * FROM users WHERE id = " ~ $id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dbh_query_interpolated_flags(self):
+        assert self._reg(
+            '$dbh.query("SELECT * FROM users WHERE id = $id")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_prepare_tilde_concat_flags(self):
+        assert self._reg(
+            '$db.prepare("UPDATE accounts SET balance = balance - " ~ $amt)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_query_interpolated_delete_flags(self):
+        assert self._reg(
+            '$conn.query("DELETE FROM sessions WHERE sid = $sid")\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dbh_do_tilde_concat_flags(self):
+        assert self._reg(
+            '$dbh.do("DROP TABLE " ~ $tbl)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_var_assignment_tilde_flags(self):
+        assert self._reg(
+            'my $sql = "SELECT * FROM t WHERE uname = " ~ $name;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_var_assignment_interpolated_flags(self):
+        assert self._reg(
+            'my $stmt = "SELECT count(*) FROM items WHERE owner = $owner";\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            '$dbh.query("SELECT * FROM users WHERE id = ?", [$id])\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            '$dbh.query("SELECT count(*) FROM users")\n'
+        ) == []
+
+    def test_non_sql_interpolation_is_quiet(self):
+        assert self._reg(
+            'my $s = "hello $name";\n'
+        ) == []
+
+    def test_query_without_handle_is_quiet(self):
+        assert self._reg(
+            'query("SELECT * FROM users WHERE id = " ~ $id)\n'
+        ) == []
+
+    def test_non_raku_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            '$dbh.query("SELECT * FROM users WHERE id = " ~ $id)\n')] == []
+
+
+class TestRakuShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.raku", code)]
+
+    def test_shell_tilde_concat_flags(self):
+        assert self._reg(
+            'shell("ls -la " ~ $dir)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_interpolated_flags(self):
+        assert self._reg(
+            'shell("ping -c 1 $host")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_proc_open_tilde_concat_flags(self):
+        assert self._reg(
+            'proc-open("tar czf /tmp/backup.tgz " ~ $src, :w)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'shell("echo ok")\n'
+        ) == []
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            'run("ls", "-la", $dir)\n'
+        ) == []
+
+    def test_proc_open_argument_array_is_quiet(self):
+        assert self._reg(
+            'proc-open(["ls", "-la", $dir], :w)\n'
+        ) == []
+
+    def test_variable_only_command_is_quiet(self):
+        assert self._reg(
+            'shell($cmd)\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        assert self._reg(
+            '$dbh.query("SELECT * FROM users WHERE id = " ~ $id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_raku_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            'shell("ls -la " ~ $dir)\n')] == []
