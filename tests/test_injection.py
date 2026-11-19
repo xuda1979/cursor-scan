@@ -3997,7 +3997,7 @@ class TestDShellConcat:
 
     def test_non_d_extension_does_not_flag(self):
         # Same text under a .py extension must not fire D patterns.
-        return [(f.rule_id, f.line) for f in analyze_injection("x.py",
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'executeShell("ls -l " ~ dir);\n')] == []
 
 
@@ -4085,7 +4085,7 @@ class TestFortranSqlConcat:
 
     def test_non_fortran_extension_does_not_flag(self):
         # Same text under a .py extension must not fire Fortran patterns.
-        return [(f.rule_id, f.line) for f in analyze_injection("x.py",
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'rc = SQLExecDirect(hstmt, "SELECT * FROM user WHERE id = " // userid, SQL_NTS)\n')] == []
 
 
@@ -4128,7 +4128,7 @@ class TestFortranShellConcat:
 
     def test_non_fortran_extension_does_not_flag(self):
         # Same text under a .py extension must not fire Fortran patterns.
-        return [(f.rule_id, f.line) for f in analyze_injection("x.py",
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'call execute_command_line("dir " // folder)\n')] == []
 
 
