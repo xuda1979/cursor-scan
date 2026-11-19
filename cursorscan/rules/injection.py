@@ -1452,6 +1452,30 @@ RE_SHELL_CONCAT_GLEAM = re.compile(
     r"erlang\.system_cmd\s*\(\s*(?:" + _RE_GLEAM_STR_BUILD + r")",
     re.I,
 )
+# Elm (.elm): the signature taint is a `++`-concatenated query string (or a
+# `sql = "..." ++ x` / `let sql = "..." ++ x` assignment build consumed by a DB
+# call on a later line) fed to the elm-sql / elm-pg-style query/run/execute
+# receivers, and a `++`-concatenated command string fed to the port-based
+# Ports.exec shell bridge.  Elm applies functions with spaces and groups the
+# concatenated argument in parens, so the receivers are matched with an
+# optional `conn`-style leading argument and an optional opening paren before
+# the quoted literal.  `?`/`$1`-placeholder parameterized calls, static
+# literals, arg-array commands and pure-variable commands stay quiet.
+_RE_ELM_STR_BUILD = r"[\"'][^\"']*[\"']\s*\+\+"
+_RE_ELM_SQL_BUILD = r"[\"'][^\"']*(?:" + _SQL_KW + r")[^\"']*[\"']\s*\+\+"
+RE_SQL_CONCAT_ELM = re.compile(
+    r"\b(?:sql\.query|sql\.raw|sql\.run|sql\.execute|pool\.query|pool\.execute|"
+    + r"query|execute|run)\b[^(]*\(?\s*(?:" + _RE_ELM_SQL_BUILD + r")",
+    re.I,
+)
+RE_SQL_CONCAT_ELM_ASSIGN = re.compile(
+    r"^\s*(?:let\s+)?[A-Za-z_]\w*\s*=\s*\(?(?:" + _RE_ELM_SQL_BUILD + r")",
+    re.I,
+)
+RE_SHELL_CONCAT_ELM = re.compile(
+    r"\bPorts\.exec\s*\(?\s*\(?(?:" + _RE_ELM_STR_BUILD + r")",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1505,6 +1529,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     raku_ext = ext in ("raku", "p6", "pm6", "p6l", "p6m")
     hack_ext = ext in ("hh", "hack")
     gleam_ext = ext == "gleam"
+    elm_ext = ext == "elm"
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1831,6 +1856,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
         if gleam_ext and RE_SHELL_CONCAT_GLEAM.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if elm_ext and (RE_SQL_CONCAT_ELM.search(line) or RE_SQL_CONCAT_ELM_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if elm_ext and RE_SHELL_CONCAT_ELM.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

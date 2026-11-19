@@ -53,7 +53,7 @@ TEXT_EXTS = {
     ".vb", ".scala", ".groovy", ".gradle", ".dart", ".m", ".mm", ".ex", ".exs",
     ".erl", ".hrl", ".jl", ".hs", ".lhs", ".clj", ".cljs", ".cljc", ".fs",
     ".fsi", ".fsx", ".pas", ".pp", ".dpr", ".vbs", ".asp", ".cfm", ".cfc",
-    ".tcl", ".ml", ".mli", ".nim", ".cr", ".bat", ".cmd", ".cob", ".cbl", ".vba", ".bas", ".d", ".di", ".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08", ".adb", ".ads", ".lisp", ".lsp", ".cl", ".scm", ".rkt", ".ss", ".sld", ".gd", ".raku", ".p6", ".pm6", ".hh", ".hack", ".gleam", ".vue", ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
+    ".tcl", ".ml", ".mli", ".nim", ".cr", ".bat", ".cmd", ".cob", ".cbl", ".vba", ".bas", ".d", ".di", ".f", ".for", ".f77", ".f90", ".f95", ".f03", ".f08", ".adb", ".ads", ".lisp", ".lsp", ".cl", ".scm", ".rkt", ".ss", ".sld", ".gd", ".raku", ".p6", ".pm6", ".hh", ".hack", ".gleam", ".elm", ".vue", ".svelte", ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".properties",
     ".tf", ".cfg", ".conf",
 }
 

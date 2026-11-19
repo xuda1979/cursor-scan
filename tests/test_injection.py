@@ -5007,3 +5007,116 @@ class TestGleamShellConcat:
     def test_non_gleam_extension_does_not_flag(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
             'erlang.system_cmd("ls -la " <> dir)\n')] == []
+
+
+class TestElmSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.elm", code)]
+
+    def test_sql_query_concat_flags(self):
+        assert self._reg(
+            'Sql.query conn ("SELECT * FROM users WHERE id = " ++ id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sql_raw_concat_flags(self):
+        assert self._reg(
+            'Sql.raw conn ("SELECT * FROM users WHERE ip = " ++ ip)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sql_execute_concat_flags(self):
+        assert self._reg(
+            'Sql.execute conn ("UPDATE accounts SET balance = balance - " ++ diff)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sql_run_concat_flags(self):
+        assert self._reg(
+            'Sql.run conn ("DELETE FROM sessions WHERE sid = " ++ sid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pool_query_concat_flags(self):
+        assert self._reg(
+            'Pool.query conn ("SELECT * FROM payments WHERE name = " ++ name)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_pool_execute_concat_flags(self):
+        assert self._reg(
+            'Pool.execute conn ("DROP TABLE " ++ tbl)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_concat_flags(self):
+        assert self._reg(
+            'let sql = "SELECT count(*) FROM items WHERE owner = " ++ owner\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_placeholder_is_quiet(self):
+        assert self._reg(
+            'Sql.query conn "SELECT * FROM users WHERE id = ?" [ id ]\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'Sql.query conn "SELECT count(*) FROM users"\n'
+        ) == []
+
+    def test_non_sql_concat_is_quiet(self):
+        assert self._reg(
+            'let greeting = "hello, " ++ name\n'
+        ) == []
+
+    def test_pool_concat_without_keyword_is_quiet(self):
+        assert self._reg(
+            'Pool.query conn ("FROM items " ++ owner)\n'
+        ) == []
+
+    def test_non_elm_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            'Sql.query conn ("SELECT * FROM users WHERE id = " ++ id)\n')] == []
+
+
+class TestElmShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.elm", code)]
+
+    def test_ports_exec_concat_flags(self):
+        assert self._reg(
+            'Ports.exec ("tar -czf backup.tar.gz " ++ target)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_ports_exec_interpolated_concat_flags(self):
+        assert self._reg(
+            'Ports.exec ("ping -c 1 " ++ host)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_ports_exec_chained_concat_flags(self):
+        assert self._reg(
+            'Ports.exec ("cat " ++ path ++ " | grep " ++ needle)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            'Ports.exec "tar -czf backup.tar.gz /data"\n'
+        ) == []
+
+    def test_arg_array_command_is_quiet(self):
+        assert self._reg(
+            'Ports.exec "ls" [ dir ]\n'
+        ) == []
+
+    def test_variable_only_command_is_quiet(self):
+        assert self._reg(
+            'Ports.exec full\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        assert self._reg(
+            'Sql.query conn ("SELECT * FROM users WHERE id = " ++ id)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_concat_without_sink_is_quiet(self):
+        assert self._reg(
+            'let cmd = "cat " ++ path\n'
+        ) == []
+
+    def test_non_elm_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.txt",
+            'Ports.exec ("tar -czf backup.tar.gz " ++ target)\n')] == []
