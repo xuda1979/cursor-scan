@@ -4243,3 +4243,164 @@ class TestAdaShellConcat:
         # Same text under a .py extension must not fire Ada patterns.
         assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'Spawn_Command ("dir " & Folder);\n')] == []
+
+
+class TestLispSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.lisp", code)]
+
+    def test_clsql_query_concatenate_flags(self):
+        assert self._reg(
+            '(clsql:query conn (concatenate \'string "SELECT * FROM users WHERE id = " id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_clsql_execute_command_format_flags(self):
+        assert self._reg(
+            '(clsql:execute-command conn (format nil "UPDATE accounts SET balance = ~a" amt))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_postmodern_query_concatenate_flags(self):
+        assert self._reg(
+            '(postmodern:query (concatenate \'string "DELETE FROM sessions WHERE sid = \'" sid "\'") conn)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_postmodern_execute_concatenate_flags(self):
+        assert self._reg(
+            '(postmodern:execute (concatenate \'string "DROP TABLE " tbl) conn)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite_execute_non_query_format_flags(self):
+        assert self._reg(
+            '(sqlite:execute-non-query db (format nil "INSERT INTO log VALUES (~a)" msg))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_double_colon_sink_concatenate_flags(self):
+        assert self._reg(
+            '(clsql::query conn (concatenate \'string "SELECT name FROM t WHERE id = " uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dbi_execute_concatenate_flags(self):
+        assert self._reg(
+            '(dbi:execute conn (concatenate \'string "UPDATE t SET v = " newv))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_defparameter_assignment_concatenate_flags(self):
+        assert self._reg(
+            '(defparameter *sql* (concatenate \'string "SELECT * FROM orders WHERE uid = " uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_setf_assignment_format_flags(self):
+        assert self._reg(
+            '(setf *stmt* (format nil "DELETE FROM t WHERE id = ~a" idv))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_defvar_assignment_concatenate_flags(self):
+        assert self._reg(
+            '(defvar *q* (concatenate \'string "CREATE TABLE t (id int) " suffix))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_placeholder_query_is_quiet(self):
+        assert self._reg(
+            '(clsql:query conn "SELECT * FROM users WHERE id = ?" :parameters (list id))\n'
+        ) == []
+
+    def test_named_placeholder_is_quiet(self):
+        assert self._reg(
+            '(postmodern:query "SELECT * FROM sessions WHERE sid = $1" sid)\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            '(clsql:query conn "SELECT count(*) FROM users")\n'
+        ) == []
+
+    def test_static_parameterized_def_is_quiet(self):
+        assert self._reg(
+            '(defparameter *static-sql* "SELECT * FROM t WHERE id = ?")\n'
+        ) == []
+
+    def test_non_sql_concatenate_is_quiet(self):
+        assert self._reg(
+            '(concatenate \'string "hello " name)\n'
+        ) == []
+
+    def test_concatenate_without_sink_is_quiet(self):
+        assert self._reg(
+            '(concatenate \'string "SELECT * FROM users" " WHERE id = 1")\n'
+        ) == []
+
+    def test_db_call_result_assignment_is_quiet(self):
+        # sql bound from a DB call result, not a concatenate build.
+        assert self._reg(
+            '(defparameter *rows* (clsql:query conn "SELECT 1"))\n'
+        ) == []
+
+    def test_non_lisp_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            '(clsql:query conn (concatenate \'string "SELECT * FROM users WHERE id = " id))\n')] == []
+
+    def test_quote_string_type_concatenate_flags(self):
+        assert self._reg(
+            '(sqlite:execute db (concatenate \'simple-string "DELETE FROM log WHERE v = " val))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_plain_concatenate_type_flags(self):
+        # `concatenate string ...` without the quote prefix (unquoted type symbol).
+        assert self._reg(
+            '(postmodern:query (concatenate string "SELECT * FROM t WHERE day = " day))\n'
+        ) == [("injection.sql_concat", 1)]
+
+
+class TestLispShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.lisp", code)]
+
+    def test_uiop_run_program_concatenate_flags(self):
+        assert self._reg(
+            '(uiop:run-program (concatenate \'string "ls -la " dir) :output t)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_sb_ext_run_program_format_flags(self):
+        assert self._reg(
+            '(sb-ext:run-program (format nil "cat ~a" file) :output t)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_run_shell_command_concatenate_flags(self):
+        assert self._reg(
+            '(run-shell-command (concatenate \'string "ping -c 1 " host))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_uiop_launch_program_concatenate_flags(self):
+        assert self._reg(
+            '(uiop:launch-program (concatenate \'string "sh -c \'" cmd "\'"))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_double_colon_sb_ext_flags(self):
+        assert self._reg(
+            '(sb-ext::run-program (concatenate \'string "rm -rf " path))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            '(uiop:run-program (list "ls" "-la" "/tmp") :output t)\n'
+        ) == []
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            '(uiop:run-program "ls -la" :output t)\n'
+        ) == []
+
+    def test_run_shell_command_static_is_quiet(self):
+        assert self._reg(
+            '(run-shell-command "ping -c 1 localhost")\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        # A SQL concatenate build must not double-fire the shell rule.
+        assert self._reg(
+            '(clsql:query conn (concatenate \'string "SELECT * FROM users WHERE id = " id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_lisp_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            '(uiop:run-program (concatenate \'string "ls -la " dir))\n')] == []

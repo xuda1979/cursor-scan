@@ -1241,6 +1241,50 @@ RE_SHELL_CONCAT_ADA = re.compile(
     re.I,
 )
 
+# Common Lisp (.lisp / .lsp / .cl): the signature taint is a
+# `(concatenate 'string "..." var)`-built or `(format nil "...~a" var)`-built
+# keyword-bearing query string fed to a CLSQL / cl-sqlite / postmodern /
+# dbi/dbs `query` / `execute*` sink (inside a receiver call), or a
+# `(defparameter ...)` / `(defvar ...)` / `(setf ...)` assignment build
+# consumed by a DB call on a later line, and a concatenate/format-built
+# command string fed to `uiop:run-program` / `uiop:launch-program` /
+# `sb-ext:run-program` / `run-shell-command`.  Parameterized queries
+# (`?` / `$1` placeholders, static SQL strings) and non-SQL string building
+# stay quiet.
+_RE_LISP_SQL_BUILD = (
+    r"\(\s*(?:concatenate\s+'?(?:string|simple-string|base-string)\s+(?:"
+    + _SQL_STR
+    + r")|format\s+nil\s+[\"'][^\"']*(?:"
+    + _SQL_KW
+    + r")[^\"']*~[^\"']*[\"'])"
+)
+RE_SQL_CONCAT_LISP = re.compile(
+    r"\b(?:clsql:(?:query|execute-command|execute-command-raw)|"
+    + r"clsql::(?:query|execute-command|execute-command-raw)|"
+    + r"sqlite:(?:execute-non-query|execute-to-list|execute-single|execute)|"
+    + r"sqlite::(?:execute-non-query|execute-to-list|execute-single|execute)|"
+    + r"postmodern:(?:query|execute|prepare)|postmodern::(?:query|execute|prepare)|"
+    + r"db:(?:execute|query|prepare)|db::(?:execute|query|prepare)|"
+    + r"dbs:(?:execute|query)|dbi:(?:execute|query))"
+    + r"[^(]*"
+    + _RE_LISP_SQL_BUILD,
+    re.I,
+)
+RE_SQL_CONCAT_LISP_ASSIGN = re.compile(
+    r"^\s*\(\s*(?:defparameter|defvar|defconstant|setf)\s+"
+    + r"[A-Za-z*][A-Za-z0-9_*+-]*\s+"
+    + _RE_LISP_SQL_BUILD,
+    re.I,
+)
+RE_SHELL_CONCAT_LISP = re.compile(
+    r"\b(?:uiop:run-program|uiop:launch-program|sb-ext:run-program|"
+    + r"sb-ext::run-program|run-shell-command|excl:run-shell-command|"
+    + r"sys:run-program)\s*[^(]*"
+    + r"\(\s*(?:concatenate\s+'?(?:string|simple-string|base-string)\s+"
+    + r"[\"'][^\"']*[\"']|format\s+nil\s+[\"'][^\"']*~[^\"']*[\"'])",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1287,6 +1331,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     d_ext = ext in ("d", "di")
     for_ext = ext in ("f", "for", "f77", "f90", "f95", "f03", "f08")
     ada_ext = ext in ("adb", "ads")
+    lisp_ext = ext in ("lisp", "lsp", "cl")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1577,6 +1622,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if ada_ext and RE_SHELL_CONCAT_ADA.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if lisp_ext and (RE_SQL_CONCAT_LISP.search(line) or RE_SQL_CONCAT_LISP_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if lisp_ext and RE_SHELL_CONCAT_LISP.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
