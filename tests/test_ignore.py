@@ -96,15 +96,15 @@ def bad_copy(tmp_path):
 
 
 class TestIgnoreIntegration:
-    """scan_bad yields 567 findings; sql_concat x279, shell_concat x155,
-    crypto.* x9, xss medium x3."""
+    """scan_bad yields 574 findings; sql_concat x279, shell_concat x155,
+    crypto.* x9, xss medium x3, deps.known_vulnerable x16."""
 
     def test_cli_ignore_reduces_findings(self, bad_copy, capsys):
         rc = main([bad_copy, "--no-save", "--ignore", "injection.sql_concat",
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1  # high/critical findings remain, --fail-on high gate holds
-        assert "发现 288 个问题" in out  # 567 - 279 suppressed
+        assert "发现 295 个问题" in out  # 574 - 279 suppressed
         assert "已忽略 279 个发现" in out
 
     def test_glob_ignore_suppresses_rule_family(self, bad_copy, capsys):
@@ -112,7 +112,7 @@ class TestIgnoreIntegration:
                    "--history-dir", "unused"])
         out = capsys.readouterr().out
         assert rc == 1
-        assert "发现 558 个问题" in out  # 567 - 9 crypto
+        assert "发现 565 个问题" in out  # 574 - 9 crypto
         assert "已忽略 9 个发现" in out
 
     def test_rule_file_line_form(self, bad_copy, capsys):
@@ -158,7 +158,6 @@ class TestIgnoreIntegration:
         out = capsys.readouterr().out
         assert rc == 1
         assert "已忽略 288 个发现" in out  # 9 crypto + 279 sql_concat
-
     def test_suppress_all_flips_gate_to_clean(self, bad_copy, capsys):
         with open(os.path.join(bad_copy, ".cursor-scan.json"), "w") as fh:
             json.dump({"ignore": ["*"]}, fh)

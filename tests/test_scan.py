@@ -89,6 +89,7 @@ BAD_EXPECTED = [
                         "crypto.fixed_iv", "crypto.hardcoded_seed"}),
     ("requirements.txt", {"deps.known_vulnerable"}),
     ("package.json", {"deps.known_vulnerable"}),
+    ("go.mod", {"deps.known_vulnerable"}),
     ("xss.py", {"xss.template_render", "xss.mark_safe"}),
     ("xss_app.svelte", {"xss.svelte_html"}),
     ("xss_app.vue", {"xss.html_binding"}),

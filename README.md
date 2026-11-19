@@ -16,7 +16,7 @@
   - 注入（injection）：SQL 字符串拼接、shell 拼接（`subprocess` / `os.system`）、`shell=True`
   - 文件权限（permissions）：`chmod 0777`、写入 /tmp 无校验
   - 访问控制（access_control）：缺鉴权路由等
-  - 依赖风险（dependencies）：`requirements*.txt` / `package.json` 中的已知漏洞版本（离线 CVE 表）与未固定版本
+  - 依赖风险（dependencies）：`requirements*.txt` / `package.json` / `go.mod` 中的已知漏洞版本（离线 CVE 表）与未固定版本
   - 跨站脚本（xss）：`innerHTML` / `insertAdjacentHTML` / `outerHTML` DOM 写入、React `dangerouslySetInnerHTML`、`document.write`、Jinja `render_template_string` / `Markup` / `|safe` 关闭转义
 - **评分卡**：每维度从 100 起，按严重度扣分（low 5 / medium 12 / high 20 / critical 30），
   总分 = 各维度均分；等级 A≥90, B≥75, C≥60, D≥40, F<40。每项发现都给出
@@ -132,8 +132,8 @@ python -m pytest tests/ -q   # 全量测试
 
 `fixtures/` 下有两棵树用于验收测试：
 
-- `fixtures/scan_bad/`：故意植入漏洞的 70 个文件（弱密码学 / 秘密 / 反序列化 / 注入 / 权限 / 访问控制
-  / 依赖清单 / 跨站脚本），共 100 条期望规则 ID，检测率须 ≥ 90%。注入规则覆盖 Python / JS / PHP / Java /
+- `fixtures/scan_bad/`：故意植入漏洞的 71 个文件（弱密码学 / 秘密 / 反序列化 / 注入 / 权限 / 访问控制
+  / 依赖清单 / 跨站脚本），共 146 条期望规则 ID，检测率须 ≥ 90%。注入规则覆盖 Python / JS / PHP / Java /
   Ruby / Go / C# / Kotlin / Rust / Perl / Lua / C/C++ / Swift / Shell / R / PowerShell / SQL / VB.NET / Scala / Groovy / Dart / Objective-C / Elixir / Erlang / Julia / Haskell / Clojure / F# / Delphi / Pascal / VBScript / classic ASP / ColdFusion / Tcl / OCaml / Nim / Crystal / Batch / COBOL / VBA / D / Fortran / Ada / Common Lisp / Scheme (Racket) / GDScript (Godot) / Raku (Perl 6) / Hack (HHVM) / Gleam / Elm / Vue / Svelte。
 - `fixtures/scan_good/`：干净项目，须零误报（0 findings、100 / A）。
 
@@ -141,7 +141,7 @@ python -m pytest tests/ -q   # 全量测试
 
 | AC | 状态 |
 | --- | --- |
-| 1. scan_bad 检测率 ≥ 90% | ✅ 99/99（100%） |
+| 1. scan_bad 检测率 ≥ 90% | ✅ 146/146（100%） |
 | 2. scan_good 零误报 | ✅ 0 findings / 100 / A |
 | 3. 评分卡 + 逐项证据 | ✅ |
 | 4. 历史快照 + diff | ✅ |
@@ -155,7 +155,7 @@ python -m pytest tests/ -q   # 全量测试
 - [x] P1 CLI + SARIF + 门禁
 - [x] P2a 扫描历史快照 + diff（CLI）
 - [x] P2b Web dashboard（读取历史快照）
-- [x] P3 依赖风险 flag（requirements.txt / package.json 高危已知库）
+- [x] P3 依赖风险 flag（requirements.txt / package.json / go.mod 高危已知库）
 - [x] P4 XSS 检测维度（DOM sinks / React / document.write / 模板渲染）
 
 ## 授权与协议

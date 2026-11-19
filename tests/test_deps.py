@@ -136,6 +136,61 @@ class TestAnalyzePackageJson:
         assert deps.analyze_code(str(p), "{ not json") == []
 
 
+class TestAnalyzeGoMod:
+    def test_vulnerable_block_requires_reported(self, tmp_path):
+        p = tmp_path / "go.mod"
+        code = """module example.com/app
+
+go 1.19
+
+require (
+\tgithub.com/dgrijalva/jwt-go v3.2.0
+\tgithub.com/gorilla/websocket v1.4.2
+\tgithub.com/valyala/fasthttp v1.25.0
+\tgithub.com/spf13/cobra v0.0.3
+\tgithub.com/hashicorp/go-retryablehttp v0.6.5
+\tgopkg.in/yaml.v2 v2.2.1
+)
+"""
+        p.write_text(code, encoding="utf-8")
+        found = deps.analyze_code(str(p), code)
+        assert [f.rule_id for f in found] == ["deps.known_vulnerable"] * 6
+        names = {f.message.split()[0] for f in found}
+        assert "github.com/dgrijalva/jwt-go" in names
+        assert "gopkg.in/yaml.v2" in names
+        for f in found:
+            assert f.dimension == "dependencies"
+
+    def test_single_line_require_reported(self, tmp_path):
+        p = tmp_path / "go.mod"
+        code = ("module example.com/app\n\ngo 1.19\n\n"
+                "require gopkg.in/yaml.v2 v2.2.4 // indirect\n")
+        p.write_text(code, encoding="utf-8")
+        found = deps.analyze_code(str(p), code)
+        assert len(found) == 1
+        assert found[0].line == 5
+
+    def test_secure_pins_not_reported(self, tmp_path):
+        p = tmp_path / "go.mod"
+        code = """module example.com/app
+
+go 1.20
+
+require (
+\tgithub.com/dgrijalva/jwt-go v3.2.1
+\tgithub.com/valyala/fasthttp v1.51.0
+\tgopkg.in/yaml.v2 v2.4.0
+)
+"""
+        p.write_text(code, encoding="utf-8")
+        assert deps.analyze_code(str(p), code) == []
+
+    def test_other_filenames_ignored(self, tmp_path):
+        p = tmp_path / "go.sum"
+        p.write_text("github.com/dgrijalva/jwt-go v3.2.0 h1:xxx\n", encoding="utf-8")
+        assert deps.analyze_code(str(p), p.read_text(encoding="utf-8")) == []
+
+
 class TestPipelineIntegration:
     def test_deps_findings_in_scan_result(self, scan_bad_dir):
         from cursorscan.scan import scan_project

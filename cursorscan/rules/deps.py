@@ -1,5 +1,5 @@
 """Dependency risk (P3): known-vulnerable and unpinned packages in
-requirements*.txt / package.json.
+requirements*.txt / package.json / go.mod.
 
 Uses a small curated, static CVE table so it runs fully offline.  A pin at or
 below a package's last-vulnerable release is flagged with its advisory; an
@@ -37,6 +37,13 @@ KNOWN_VULNS: Dict[str, List[Tuple[str, str, str, str]]] = {
     "axios": [("0.21.1", "CVE-2021-3749", "high", "SSRF + 服务器端请求认证绕过")],
     "moment": [("2.29.3", "CVE-2022-31129", "medium", "duration 解析 ReDoS")],
     "yargs-parser": [("18.1.1", "CVE-2020-7608", "medium", "原型污染")],
+    # Go module versions (no leading v in the last-vulnerable marker).
+    "gopkg.in/yaml.v2": [("2.2.8", "CVE-2019-11254", "high", "yaml.Unmarshal 超大别名表 DoS")],
+    "github.com/dgrijalva/jwt-go": [("3.2.0", "CVE-2020-26160", "high", "jwt-go 越界读，可致进程 panic")],
+    "github.com/gorilla/websocket": [("1.4.2", "CVE-2020-27813", "medium", "WebSocket 握手竞态信息泄露")],
+    "github.com/valyala/fasthttp": [("1.33.0", "CVE-2022-21221", "high", "fasthttp 请求走私 (CRLF)")],
+    "github.com/hashicorp/go-retryablehttp": [("0.7.1", "CVE-2022-46773", "medium", "日志中泄露 Authorization 头")],
+    "github.com/spf13/cobra": [("1.0.0", "CVE-2019-19551", "medium", "spf13/cobra 命令注入 (旧 bound 参数)")],
 }
 
 
@@ -188,6 +195,40 @@ def _check_package_json(path: str, code: str, findings: List[Evidence]) -> None:
 
 
 # --------------------------------------------------------------------------
+# go.mod
+# --------------------------------------------------------------------------
+
+# A Go module require line: path + a version (usually v-prefixed).
+_GO_REQUIRE_RE = re.compile(r'^\s*([A-Za-z0-9_.\-/]+)\s+(v?\d+(?:\.\d+)*[^ \t]*)')
+
+
+def _check_go_mod(path: str, code: str, findings: List[Evidence]) -> None:
+    for lineno, raw in enumerate(code.splitlines(), start=1):
+        s = raw.strip()
+        if not s or s.startswith("//") or s.startswith("module ") \
+                or s.startswith("go ") or s.startswith("require ("):
+            continue
+        if s == ")":
+            continue
+        # Drop trailing comments; unwrap a single-line `require pkg vX`.
+        body = s.split("//", 1)[0].strip()
+        if body.startswith("require "):
+            body = body[len("require "):].strip()
+        m = _GO_REQUIRE_RE.match(body)
+        if not m:
+            continue
+        name, version = m.groups()
+        # Only exact v-prefixed (or bare plain) pins; no +incompatible markers.
+        base = version.split("+")[0]
+        if not base.startswith("v") and not re.match(r"^\d+(\.\d+)+$", base):
+            continue
+        clean = base.lstrip("v")
+        vuln = _known_vuln(name, clean)
+        if vuln:
+            findings.append(_vuln_evidence(path, lineno, name, " " + version, *vuln))
+
+
+# --------------------------------------------------------------------------
 # Public entry point (per-file rule, runs on every text file)
 # --------------------------------------------------------------------------
 
@@ -199,4 +240,6 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     elif (base == "requirements.txt" or base == "requirement.txt"
           or (base.startswith("requirements") and base.endswith(".txt"))):
         _check_requirements(source_path, code, findings)
+    elif base == "go.mod":
+        _check_go_mod(source_path, code, findings)
     return findings
