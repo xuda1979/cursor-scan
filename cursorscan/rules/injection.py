@@ -1285,6 +1285,40 @@ RE_SHELL_CONCAT_LISP = re.compile(
     re.I,
 )
 
+# Scheme / Racket (.scm / .rkt / .ss / .sld): the signature taint is a
+# `(string-append "SQL...KW..." var)`-built query string fed to a Racket db
+# library sink (`db:query` / `db:exec` / `sqlite:exec` / `sqlite3:exec`) or a
+# Guile sqlite sink, a `(define ...)` / `(set! ...)` assignment build consumed
+# by a DB call on a later line, and a string-append-built command string fed
+# to `system` / `system*` / `process` / `open-output-pipe` / `pipeline`.
+# Parameterized queries (`,params` / `?` placeholders, static SQL strings) and
+# non-SQL string building stay quiet.
+_RE_SCHEME_SQL_BUILD = (
+    r"\(\s*(?:string-append|string-concat)\s+(?:"
+    + _SQL_STR
+    + r")|\(\s*format\s+[\"'][^\"']*(?:"
+    + _SQL_KW
+    + r")[^\"']*~[^\"']*[\"']"
+)
+RE_SQL_CONCAT_SCHEME = re.compile(
+    r"\b(?:db:query|db:exec|db:prepare|db:statement|db:conn-query|"
+    + r"sqlite:exec|sqlite:exec!|sqlite:exec-non-query|sqlite3:exec)\s*"
+    + r"[^(]*"
+    + _RE_SCHEME_SQL_BUILD,
+    re.I,
+)
+RE_SQL_CONCAT_SCHEME_ASSIGN = re.compile(
+    r"^\s*\(\s*(?:define|set!)\s+[A-Za-z*][A-Za-z0-9_*+-]*\s+"
+    + _RE_SCHEME_SQL_BUILD,
+    re.I,
+)
+RE_SHELL_CONCAT_SCHEME = re.compile(
+    r"\b(?:system|system\*|process|open-output-pipe|pipeline|shell-command)\s*"
+    + r"[^(]*\(\s*(?:(?:string-append|string-concat)\s+"
+    + r"[\"'][^\"']*[\"']|format\s+[\"'][^\"']*~[^\"']*[\"'])",
+    re.I,
+)
+
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
     findings: List[Evidence] = []
@@ -1332,6 +1366,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     for_ext = ext in ("f", "for", "f77", "f90", "f95", "f03", "f08")
     ada_ext = ext in ("adb", "ads")
     lisp_ext = ext in ("lisp", "lsp", "cl")
+    scheme_ext = ext in ("scm", "rkt", "ss", "sld")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1628,6 +1663,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if lisp_ext and RE_SHELL_CONCAT_LISP.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if scheme_ext and (RE_SQL_CONCAT_SCHEME.search(line) or RE_SQL_CONCAT_SCHEME_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (?)"))
+        if scheme_ext and RE_SHELL_CONCAT_SCHEME.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

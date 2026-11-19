@@ -4404,3 +4404,134 @@ class TestLispShellConcat:
     def test_non_lisp_extension_does_not_flag(self):
         assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
             '(uiop:run-program (concatenate \'string "ls -la " dir))\n')] == []
+
+
+class TestSchemeSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.scm", code)]
+
+    def test_db_query_string_append_flags(self):
+        assert self._reg(
+            '(db:query conn (string-append "SELECT * FROM users WHERE id = " id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_exec_string_append_flags(self):
+        assert self._reg(
+            '(db:exec conn (string-append "UPDATE accounts SET balance = " amt))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite_exec_string_append_flags(self):
+        assert self._reg(
+            '(sqlite:exec db (string-append "DELETE FROM sessions WHERE sid = \'" sid "\'"))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_exec_string_append_flags(self):
+        assert self._reg(
+            '(sqlite3:exec db (string-append "DROP TABLE " tbl))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_query_format_flags(self):
+        assert self._reg(
+            '(db:query conn (format "INSERT INTO log VALUES (~a)" msg))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_define_assignment_string_append_flags(self):
+        assert self._reg(
+            '(define *sql* (string-append "SELECT * FROM orders WHERE uid = " uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_setf_assignment_format_flags(self):
+        assert self._reg(
+            '(set! *stmt* (format "DELETE FROM t WHERE id = ~a" idv))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_string_concat_sink_flags(self):
+        assert self._reg(
+            '(db:query conn (string-concat "SELECT name FROM t WHERE id = " uid))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            '(db:query conn "SELECT * FROM users WHERE id = ?" (list id))\n'
+        ) == []
+
+    def test_sqlite_placeholder_is_quiet(self):
+        assert self._reg(
+            '(sqlite:exec db "DELETE FROM sessions WHERE sid = $1" (list sid))\n'
+        ) == []
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            '(sqlite:exec db "SELECT count(*) FROM users")\n'
+        ) == []
+
+    def test_non_sql_string_append_is_quiet(self):
+        assert self._reg(
+            '(string-append "hello " name)\n'
+        ) == []
+
+    def test_string_append_without_sink_is_quiet(self):
+        assert self._reg(
+            '(string-append "SELECT * FROM users" " WHERE id = 1")\n'
+        ) == []
+
+    def test_db_call_result_assignment_is_quiet(self):
+        assert self._reg(
+            '(define *rows* (db:query conn "SELECT 1"))\n'
+        ) == []
+
+    def test_non_scheme_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            '(db:query conn (string-append "SELECT * FROM users WHERE id = " id))\n')] == []
+
+
+class TestSchemeShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.scm", code)]
+
+    def test_system_string_append_flags(self):
+        assert self._reg(
+            '(system (string-append "ls -la " dir))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_open_output_pipe_string_append_flags(self):
+        assert self._reg(
+            '(open-output-pipe (string-append "cat " file))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_process_format_flags(self):
+        assert self._reg(
+            '(process (format "ping -c 1 ~a" host))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_star_string_append_flags(self):
+        assert self._reg(
+            '(system* (string-append "rm -rf " path))\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_command_is_quiet(self):
+        assert self._reg(
+            '(system "ls -la")\n'
+        ) == []
+
+    def test_argument_list_is_quiet(self):
+        assert self._reg(
+            '(system* "ls" "-la" "/tmp")\n'
+        ) == []
+
+    def test_sql_build_is_not_shell(self):
+        assert self._reg(
+            '(db:query conn (string-append "SELECT * FROM users WHERE id = " id))\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_scheme_extension_does_not_flag(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            '(system (string-append "ls -la " dir))\n')] == []
+
+    def test_rkt_extension_flags(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.rkt",
+            '(db:query conn (string-append "SELECT * FROM users WHERE id = " id))\n')] == [("injection.sql_concat", 1)]
+
+    def test_ss_extension_flags(self):
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.ss",
+            '(db:query conn (string-append "SELECT * FROM users WHERE id = " id))\n')] == [("injection.sql_concat", 1)]
