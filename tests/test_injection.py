@@ -3992,3 +3992,134 @@ class TestDShellConcat:
         # Same text under a .py extension must not fire D patterns.
         return [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'executeShell("ls -l " ~ dir);\n')] == []
+
+
+class TestFortranSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.f90", code)]
+
+    def test_sqlexecdirect_slashslash_concat_flags(self):
+        assert self._reg(
+            'rc = SQLExecDirect(hstmt, "SELECT * FROM user WHERE id = " // userid, SQL_NTS)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlexecdirect_apostrophe_concat_flags(self):
+        assert self._reg(
+            "call SQLExecDirect(hstmt, 'UPDATE log SET v = ' // val // '', SQL_NTS)\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlexecute_concat_flags(self):
+        assert self._reg(
+            'rc = SQLExecute(hstmt, "DELETE FROM t WHERE x = " // xval)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_pct_execute_concat_flags(self):
+        assert self._reg(
+            "call db%execute('INSERT INTO log VALUES(' // msg // ')')\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_pct_execute_concat_flags(self):
+        assert self._reg(
+            'call conn%execute("CREATE TABLE t (id int) " // suffix)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlprepare_concat_flags(self):
+        assert self._reg(
+            'rc = SQLPrepare(hstmt, "SELECT name FROM users WHERE id = " // uid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_execute_immediate_concat_flags(self):
+        assert self._reg(
+            'rc = execute_immediate(db, "SELECT name FROM users WHERE id = " // uid)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_plain_assignment_concat_flags(self):
+        assert self._reg(
+            'sql = "SELECT name FROM t WHERE id = " // user_input\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_apostrophe_assignment_concat_flags(self):
+        assert self._reg(
+            "query = 'DELETE FROM t WHERE id = ' // idv\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_update_assignment_concat_flags(self):
+        assert self._reg(
+            "sql = 'UPDATE t SET v = ' // newval\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_typed_assignment_concat_flags(self):
+        assert self._reg(
+            'character(len=200) :: sql\n'
+            'sql = "SELECT * FROM t WHERE id = " // uid\n'
+        ) == [("injection.sql_concat", 2)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'sql = "SELECT count(*) FROM t"\n'
+        ) == []
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            'rc = SQLExecDirect(hstmt, "SELECT * FROM user WHERE id = ?", SQL_NTS)\n'
+            "call db%execute('INSERT INTO log VALUES(?)')\n"
+        ) == []
+
+    def test_variable_only_sink_is_quiet(self):
+        assert self._reg(
+            'rc = SQLExecDirect(hstmt, query, SQL_NTS)\n'
+            "call conn%execute(prepstmt)\n"
+        ) == []
+
+    def test_non_sql_slashslash_concat_is_quiet(self):
+        assert self._reg(
+            'msg = "hello " // folder\n'
+        ) == []
+
+    def test_non_fortran_extension_does_not_flag(self):
+        # Same text under a .py extension must not fire Fortran patterns.
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            'rc = SQLExecDirect(hstmt, "SELECT * FROM user WHERE id = " // userid, SQL_NTS)\n')] == []
+
+
+class TestFortranShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.f90", code)]
+
+    def test_execute_command_line_concat_flags(self):
+        assert self._reg(
+            'call execute_command_line("dir " // folder)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_execute_command_line_apostrophe_concat_flags(self):
+        assert self._reg(
+            "call EXECUTE_COMMAND_LINE('rm -rf /tmp/' // name // '')\n"
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_concat_flags(self):
+        assert self._reg(
+            'call system("ls -la " // path)\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_shell_is_quiet(self):
+        assert self._reg(
+            'call execute_command_line("dir")\n'
+            'call system("echo hi")\n'
+        ) == []
+
+    def test_variable_only_shell_is_quiet(self):
+        assert self._reg(
+            'call execute_command_line(cmd)\n'
+            'call system(cmdline)\n'
+        ) == []
+
+    def test_sql_concat_is_not_shell(self):
+        # A SQL `//` concat must not double-fire the shell rule.
+        assert self._reg(
+            'rc = SQLExecDirect(hstmt, "SELECT * FROM user WHERE id = " // userid, SQL_NTS)\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_fortran_extension_does_not_flag(self):
+        # Same text under a .py extension must not fire Fortran patterns.
+        return [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            'call execute_command_line("dir " // folder)\n')] == []

@@ -10,7 +10,7 @@ import re
 from typing import List
 
 from ..models import Evidence
-from .helpers import code_lines
+from .helpers import _is_regex_definition, code_lines
 
 # Regex fallbacks ------------------------------------------------------------
 RE_SQL_CONCAT_PY = re.compile(
@@ -1180,6 +1180,35 @@ RE_SHELL_CONCAT_D = re.compile(
     r"\b(?:executeShell|spawnShell|system)\s*\([^\"'\n]*[\"'][^\"'\n]*[\"']\s*~",
     re.I,
 )
+# Fortran (.f/.for/.f77/.f90/.f95/.f03/.f08): scientific/legacy code
+# frequently shells out through EXECUTE COMMAND LINE / SYSTEM, and DB work
+# goes through ODBC (SQLExecDirect / SQLExecute / SQLPrepare) or
+# db%execute-style derived-type runners, with SQL strings joined by the `//`
+# concatenation operator.  The taint signal is a keyword-bearing quoted
+# fragment immediately followed by `//`, i.e. a user-controlled expression
+# spliced into the statement.  Static calls (no `//`), parameterized queries
+# and non-SQL `//` concatenation stay quiet.
+RE_SQL_CONCAT_FOR = re.compile(
+    r"\b(?:SQLExecDirect|SQLExecute|SQLPrepare|"
+    + r"(?:db|conn|connection|pconn|stmt|hstmt)\s*%\s*(?:execute|exec)|"
+    + r"(?:execute_immediate|exec_immediate)\s*(?:\(|%)\s*)\s*"
+    + r"[^\"'\n]*("
+    + _SQL_STR
+    + r")\s*//",
+    re.I,
+)
+RE_SQL_CONCAT_FOR_ASSIGN = re.compile(
+    r"^\s*(?:(?:character(?:\s*\(\s*\*?\w*(?:\s*,\s*\w+\s*)*\))?(?:\s*\*\s*\d+)?)\s+::?\s*)?"
+    + r"(?:[A-Za-z_]\w*\s*=\s*)?("
+    + _SQL_STR
+    + r")\s*//",
+    re.I,
+)
+RE_SHELL_CONCAT_FOR = re.compile(
+    r"\b(?:EXECUTE\s+COMMAND\s+LINE|EXECUTE_COMMAND_LINE|(?:CALL\s+)?SYSTEM|run\s*)\s*"
+    + r"(?:\([^\"'\n]{0,40})?[\"'][^\"'\n]*[\"']\s*//",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1225,6 +1254,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     cob_ext = ext in ("cob", "cbl")
     vba_ext = ext in ("vba", "bas")
     d_ext = ext in ("d", "di")
+    for_ext = ext in ("f", "for", "f77", "f90", "f95", "f03", "f08")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1514,4 +1544,18 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
             findings.append(hit(lineno, "injection.shell_concat", "shell=True 命令执行",
                                 "subprocess 调用开启 shell=True", "传入参数列表并关闭 shell"))
+
+    # Fortran operates on raw lines: its concatenation operator is `//`, which
+    # ``code_lines`` drops as a C-style comment, and Fortran comments use `!`
+    # (never ``//``), so raw-line matching is both required and safe.
+    if for_ext:
+        for lineno, raw in enumerate(code.splitlines(), start=1):
+            if _is_regex_definition(raw):
+                continue
+            if RE_SQL_CONCAT_FOR.search(raw) or RE_SQL_CONCAT_FOR_ASSIGN.match(raw):
+                findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                    "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+            elif RE_SHELL_CONCAT_FOR.search(raw):
+                findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                    "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
     return findings

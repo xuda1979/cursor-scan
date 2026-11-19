@@ -314,10 +314,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "deser.eval", "eval 外部输入",
                                 "eval 处理外部输入可执行任意代码", "重构解析逻辑，不使用 eval"))
         # Nim's `exec` is the db_sqlite/db_mysql statement runner (``db.exec(db,
-        # "SELECT ...")``), not Python-style source execution, so the generic
+        # "SELECT ...")``), D's `db.exec` the mysql-native runner, and Fortran
+        # derived-type members (``db%exec(...)``) the same statement-runner
+        # idiom -- none are Python-style source execution, so the generic
         # Python/JS exec convention must not fire there (extension-gate
         # precedent: yaml.load / .NET XXE below).
-        if ext not in ("nim", "d", "di") and RE_EXEC.search(raw):
+        if ext not in ("nim", "d", "di", "f", "for", "f77", "f90", "f95", "f03", "f08") and RE_EXEC.search(raw):
             findings.append(hit(lineno, "deser.exec", "exec 外部输入",
                                 "exec 处理外部输入可执行任意代码", "重构解析逻辑，不使用 exec"))
         if RE_VM_RUN.search(raw):
