@@ -1476,14 +1476,14 @@ RE_SHELL_CONCAT_ELM = re.compile(
     r"\bPorts\.exec\s*\(?\s*\(?(?:" + _RE_ELM_STR_BUILD + r")",
     re.I,
 )
-# Vue/Svelte (.vue/.svelte): SFC pages host the same JS-style taint as
-# .js/.jsx, so the JS SQL-concat receivers (db.query/pool.query/mysql2/
-# knex.raw/sequelize.query/connection.execute...) and the
-# `const q = "..." + x` assignment build are reused under the vue/svelte
-# gates.  Shell taint is the child_process family (exec/execSync/execFile/
-# spawn) fed a `+`-concatenated or backtick-`${}`-interpolated command
-# string; static literals, args-array invocation and `?`-placeholder
-# parameterized SQL stay quiet.
+# JS/Vue/Svelte (.js/.jsx/.mjs/.cjs/.ts/.tsx/.mts/.cts/.vue/.svelte): the
+# JS-family files host the same JS-style taint, so the JS SQL-concat
+# receivers (db.query/pool.query/mysql2/knex.raw/sequelize.query/
+# connection.execute...) and the `const q = "..." + x` assignment build are
+# reused under the js/vue/svelte gates.  Shell taint is the child_process
+# family (exec/execSync/execFile/spawn) fed a `+`-concatenated or
+# backtick-`${}`-interpolated command string; static literals, args-array
+# invocation and `?`-placeholder parameterized SQL stay quiet.
 RE_SHELL_CONCAT_VUE = re.compile(
     r"\b(?:exec|execSync|execFile|spawn)\s*\(\s*(?:[\"'][^\"']*[\"']\s*\+|`[^`]*\$\{)",
     re.I,
@@ -1888,6 +1888,9 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 ($1)"))
         if svelte_ext and RE_SHELL_CONCAT_VUE.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if js_ext and RE_SHELL_CONCAT_VUE.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():
