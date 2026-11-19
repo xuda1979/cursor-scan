@@ -1132,6 +1132,29 @@ RE_SHELL_CONCAT_COB = re.compile(
     r"\bCALL\s+[\"']SYSTEM[\"']\s+USING\s+[\"'][^\"'\n]{0,120}[\"']\s*[A-Za-z][A-Za-z0-9-]*",
     re.I,
 )
+# VBA (.vba/.bas): Access/Excel macro SQL is often built with the `&`
+# concatenation operator and handed to DoCmd.RunSQL / CurrentDb.Execute /
+# recordset .CommandText, or piped to Shell / WScript.Shell.Run.  The taint
+# signal is a keyword-bearing quoted fragment immediately followed by `&`, i.e.
+# a user-controlled expression spliced into the statement.  A static call
+# (no `&`) stays quiet, as do parameterized commands (`?`, `@name`) and
+# non-SQL string concatenation.
+RE_SQL_CONCAT_VBA = re.compile(
+    r"\b(?:DoCmd\.RunSQL|(?:CurrentDb|CurrentProject\.Connection|(?:db|conn|rst|rs))\.Execute|\.CommandText\s*=)"
+    + r"[^\"'\n]{0,40}?(?:" + _SQL_STR + r")\s*&",
+    re.I,
+)
+RE_SQL_CONCAT_VBA_ASSIGN = re.compile(
+    r"^\s*(?:(?:Dim|Private|Public|Const)\s+[A-Za-z_]\w*(?:\s+As\s+\w+)?\s*[=:]\s*)?"
+    + r"(?:[A-Za-z_]\w*\s*=\s*)?(?:" + _SQL_STR + r")\s*&",
+    re.I,
+)
+RE_SHELL_CONCAT_VBA = re.compile(
+    r"\bShell\s*(?:\([^)\n]{0,40})?[\"'][^\"'\n]*?[\"']\s*&"
+    + r"|CreateObject\s*\(\s*[\"']WScript\.Shell[\"']\s*\)\.(?:Run|Exec)\s*(?:\([^)\n]{0,40})?[\"'][^\"'\n]*?[\"']\s*&"
+    + r"|\bWshShell\.(?:Run|Exec)\s*(?:\([^)\n]{0,40})?[\"'][^\"'\n]*?[\"']\s*&",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1175,6 +1198,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     cr_ext = ext == "cr"
     bat_ext = ext in ("bat", "cmd")
     cob_ext = ext in ("cob", "cbl")
+    vba_ext = ext in ("vba", "bas")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1447,6 +1471,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if cob_ext and RE_SHELL_CONCAT_COB.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if vba_ext and (RE_SQL_CONCAT_VBA.search(line) or RE_SQL_CONCAT_VBA_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if vba_ext and RE_SHELL_CONCAT_VBA.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

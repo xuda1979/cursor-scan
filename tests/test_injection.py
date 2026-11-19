@@ -3781,3 +3781,108 @@ class TestCobolShellConcat:
         assert self._reg(
             '           CALL "CBL_GET_EXTERNAL" USING WS-ARG.\n'
         ) == []
+
+
+class TestVbaSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vba", code)]
+
+    def test_assign_concat_select_flags(self):
+        assert self._reg(
+            'strSQL = "SELECT * FROM Users WHERE Id = " & userId\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_docmd_runsql_concat_flags(self):
+        assert self._reg(
+            'DoCmd.RunSQL "SELECT * FROM Users WHERE Id = " & userId\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_currentdb_execute_concat_flags(self):
+        assert self._reg(
+            'CurrentDb.Execute "UPDATE logs SET status = \'" & status & "\' WHERE id = " & Id\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_execute_single_quoted_flags(self):
+        assert self._reg(
+            "db.Execute \"SELECT id FROM accounts WHERE owner = '\" & owner & \"'\"\n"
+        ) == [("injection.sql_concat", 1)]
+
+    def test_commandtext_assignment_flags(self):
+        assert self._reg(
+            'cmd.CommandText = "DELETE FROM orders WHERE id > " & minId\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_execute_drop_flags(self):
+        assert self._reg(
+            'conn.Execute "DROP TABLE IF EXISTS audit_" & suffix\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dim_colon_assign_concat_flags(self):
+        assert self._reg(
+            'Dim strSQL As String: strSQL = "SELECT * FROM t WHERE id = " & uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_dim_equals_assign_concat_flags(self):
+        assert self._reg(
+            'Dim sql As String = "SELECT * FROM t WHERE id = " & uid\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'DoCmd.RunSQL "SELECT COUNT(*) FROM t"\n'
+            'db.Execute "UPDATE t SET x=1"\n'
+            'cmd.CommandText = "SELECT * FROM Users WHERE Id = ?"\n'
+        ) == []
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            'Set qdf = db.CreateQueryDef("qryByName", "SELECT * FROM Users WHERE Name = @name")\n'
+            'qdf.Parameters("@name").Value = name\n'
+        ) == []
+
+    def test_non_sql_concat_is_quiet(self):
+        assert self._reg(
+            'strSQL = "hello " & name\n'
+            'MsgBox "Hello " & name\n'
+        ) == []
+
+
+class TestVbaShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.vba", code)]
+
+    def test_shell_concat_flags(self):
+        assert self._reg(
+            'Shell "cmd /c del /q " & path\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_shell_parenthesized_concat_flags(self):
+        assert self._reg(
+            'Shell ("psexec \\\\" & target & " -d cmd.exe")\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_createobject_wscript_run_flags(self):
+        assert self._reg(
+            'CreateObject("WScript.Shell").Run "ping " & host\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_wshshell_exec_concat_flags(self):
+        assert self._reg(
+            'WshShell.Exec "net user " & user\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_shell_is_quiet(self):
+        assert self._reg(
+            'Shell "ping -n 1 127.0.0.1", vbHide\n'
+            'WshShell.Run "date"\n'
+        ) == []
+
+    def test_variable_only_shell_is_quiet(self):
+        assert self._reg(
+            'Shell cmd\n'
+        ) == []
+
+    def test_createobject_setup_is_quiet(self):
+        assert self._reg(
+            'Set WshShell = CreateObject("WScript.Shell")\n'
+        ) == []
