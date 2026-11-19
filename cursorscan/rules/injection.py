@@ -1209,6 +1209,37 @@ RE_SHELL_CONCAT_FOR = re.compile(
     + r"(?:\([^\"'\n]{0,40})?[\"'][^\"'\n]*[\"']\s*//",
     re.I,
 )
+# Ada (.adb/.ads): DB work goes through GNATCOLL.SQL (Connection.Exec /
+# Prepared_Statement.Execute), sqlite3-ada (Sqlite3.Exec / C-interop
+# sqlite3_exec) or dbms runner methods, and shelling out through
+# GNAT.OS_Lib.Spawn_Command / Spawn_Execution or C system(), with SQL and
+# command strings joined by the `&` concatenation operator.  The taint
+# signal is a keyword-bearing quoted fragment immediately followed by `&`
+# -- a user-controlled expression spliced into the statement.  Static calls
+# (no `&`), parameterized queries and non-SQL `&` concatenation stay quiet,
+# and Ada's `--` comments are safe inside ``code_lines`` (unlike Fortran's
+# `//` operator).
+RE_SQL_CONCAT_ADA = re.compile(
+    r"\b(?:sqlite3_exec|Sqlite3\s*\.\s*Exec|"
+    + r"(?:db|conn|connection|database|dbms)\s*\.\s*(?:exec|execute|query|prepare)|"
+    + r"(?:exec|execute|query|prepare)\s*\([^\"]{0,60})\s*"
+    + r"[^\"'\n]*("
+    + _SQL_STR
+    + r")\s*&",
+    re.I,
+)
+RE_SQL_CONCAT_ADA_ASSIGN = re.compile(
+    r"^\s*(?:[A-Za-z_]\w*\s*(?::\s*(?:String|Unbounded_String|SQL_Text|Text)\s*)?:?=\s*)?"
+    + r"([\"']"
+    + _SQL_KW
+    + r"[^\"']*[\"'])\s*&",
+    re.I,
+)
+RE_SHELL_CONCAT_ADA = re.compile(
+    r"\b(?:Spawn_Command|Spawn_Execution|spawn|system)\s*"
+    + r"(?:\([^\"'\n]{0,60})?[\"'][^\"'\n]*[\"']\s*&",
+    re.I,
+)
 
 
 def analyze_code(source_path: str, code: str) -> List[Evidence]:
@@ -1255,6 +1286,7 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
     vba_ext = ext in ("vba", "bas")
     d_ext = ext in ("d", "di")
     for_ext = ext in ("f", "for", "f77", "f90", "f95", "f03", "f08")
+    ada_ext = ext in ("adb", "ads")
 
     for lineno, raw in code_lines(code):
         if "import " in raw or "from " in raw:
@@ -1539,6 +1571,12 @@ def analyze_code(source_path: str, code: str) -> List[Evidence]:
             findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
                                 "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
         if d_ext and RE_SHELL_CONCAT_D.search(line):
+            findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
+                                "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
+        if ada_ext and (RE_SQL_CONCAT_ADA.search(line) or RE_SQL_CONCAT_ADA_ASSIGN.match(line)):
+            findings.append(hit(lineno, "injection.sql_concat", "SQL 拼接注入",
+                                "用户输入被拼入 SQL，存在 SQL 注入风险", "使用参数化查询 (? 占位符)"))
+        if ada_ext and RE_SHELL_CONCAT_ADA.search(line):
             findings.append(hit(lineno, "injection.shell_concat", "Shell 拼接注入",
                                 "外部输入被拼入 shell 命令", "使用参数列表 (list) 而非字符串"))
         if RE_DANGEROUS_SHELL.search(line) and "subprocess" in line.lower():

@@ -60,6 +60,13 @@ assignments plus `xxx = ...` assignment builds, and `WScript.Shell`
 `.Run` / `.Exec` or the classic `Shell()` helper fed a `&`/`+`-
 concatenated command string; `?` placeholder ADODB parameter arrays and
 static command lines stay quiet)
+and Ada (`.adb`/`.ads`: `&`-concatenated SQL literals into GNATCOLL.SQL
+`Conn.Execute` / prepared-statements and sqlite3-ada `Sqlite3.Exec` /
+C-interop `sqlite3_exec` receivers plus `Sql := ...` / `: String := ...`
+assignment builds, and `GNAT.OS_Lib.Spawn_Command` /
+`Spawn_Execution` / `system()` fed a `&`-concatenated command string;
+`?` placeholder parameterized statements and static command lines stay
+quiet)
 for both SQL string-concatenation and shell-command concatenation.  These
 tests lock in the dynamic forms as findings and the static/parameterized/
 argument-list forms as quiet negatives.
@@ -4123,3 +4130,116 @@ class TestFortranShellConcat:
         # Same text under a .py extension must not fire Fortran patterns.
         return [(f.rule_id, f.line) for f in analyze_injection("x.py",
             'call execute_command_line("dir " // folder)\n')] == []
+
+
+class TestAdaSqlConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.adb", code)]
+
+    def test_sqlite3_exec_amp_concat_flags(self):
+        assert self._reg(
+            'sqlite3_exec (Db, "DELETE FROM log WHERE v = " & Value, Null, Null, Error);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_sqlite3_dot_exec_amp_concat_flags(self):
+        assert self._reg(
+            'Sqlite3.Exec ("SELECT * FROM users WHERE id = " & User_Id);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_conn_execute_amp_concat_flags(self):
+        assert self._reg(
+            'Conn.Execute ("UPDATE t SET x = " & New_Val);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_db_exec_amp_concat_flags(self):
+        assert self._reg(
+            'DB.Exec ("CREATE TABLE t (id int) " & Suffix);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_connection_query_amp_concat_flags(self):
+        assert self._reg(
+            'Connection.Query ("INSERT INTO log VALUES (" & Msg & ")");\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_database_prepare_amp_concat_flags(self):
+        assert self._reg(
+            'Database.Prepare ("SELECT name FROM users WHERE id = " & Uid);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_bare_exec_amp_concat_flags(self):
+        assert self._reg(
+            'Exec ("SELECT count FROM stats WHERE d = " & Day_Arg);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_assignment_amp_concat_flags(self):
+        assert self._reg(
+            'Sql := "SELECT name FROM t WHERE id = " & User_Input;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_typed_assignment_amp_concat_flags(self):
+        assert self._reg(
+            'Query : String := "DELETE FROM t WHERE id = " & Idv;\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_static_sql_is_quiet(self):
+        assert self._reg(
+            'Sqlite3.Exec ("SELECT * FROM users WHERE id = 1");\n'
+        ) == []
+
+    def test_parameterized_query_is_quiet(self):
+        assert self._reg(
+            'Sqlite3.Exec ("SELECT * FROM users WHERE id = ?", Args);\n'
+        ) == []
+
+    def test_variable_only_sink_is_quiet(self):
+        assert self._reg(
+            'Conn.Execute (Sql_Text);\n'
+        ) == []
+
+    def test_non_sql_amp_concat_is_quiet(self):
+        assert self._reg(
+            'Greeting := "hello " & Folder;\n'
+        ) == []
+
+
+class TestAdaShellConcat:
+    def _reg(self, code: str):
+        return [(f.rule_id, f.line) for f in analyze_injection("x.ads", code)]
+
+    def test_spawn_command_amp_concat_flags(self):
+        assert self._reg(
+            'Spawn_Command ("dir " & Folder);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_spawn_execution_amp_concat_flags(self):
+        assert self._reg(
+            'Spawn_Execution ("rm -rf /tmp/" & Name_Arg);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_system_amp_concat_flags(self):
+        assert self._reg(
+            'system ("ls -la " & Path);\n'
+        ) == [("injection.shell_concat", 1)]
+
+    def test_static_shell_is_quiet(self):
+        assert self._reg(
+            'Spawn_Command ("dir");\n'
+            'system ("echo hi");\n'
+        ) == []
+
+    def test_variable_only_shell_is_quiet(self):
+        assert self._reg(
+            'Spawn_Command (Cmd);\n'
+            'system (Cmd_Line);\n'
+        ) == []
+
+    def test_sql_concat_is_not_shell(self):
+        # A SQL `&` concat must not double-fire the shell rule.
+        assert self._reg(
+            'Sqlite3.Exec ("SELECT * FROM users WHERE id = " & User_Id);\n'
+        ) == [("injection.sql_concat", 1)]
+
+    def test_non_ada_extension_does_not_flag(self):
+        # Same text under a .py extension must not fire Ada patterns.
+        assert [(f.rule_id, f.line) for f in analyze_injection("x.py",
+            'Spawn_Command ("dir " & Folder);\n')] == []
